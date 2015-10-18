@@ -33,6 +33,13 @@
 #include <chrono>
 #include <experimental/optional>
 
+#ifdef SEASTAR_THREAD_USE_PTHREAD
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#endif
+
+
 /// \defgroup thread-module Seastar threads
 ///
 /// Seastar threads provide an execution environment where blocking
@@ -96,7 +103,13 @@ void init();
 }
 
 struct jmp_buf_link {
+#ifndef SEASTAR_THREAD_USE_PTHREAD
     jmp_buf jmpbuf;
+#else
+    std::thread os_thread;
+    std::mutex mutex;
+    std::condition_variable cond;
+#endif
     jmp_buf_link* link;
     thread_context* thread;
 };

@@ -32,6 +32,21 @@ namespace seastar {
 thread_local jmp_buf_link g_unthreaded_context;
 thread_local jmp_buf_link* g_current_context;
 
+#ifdef SEASTAR_THREAD_USE_PTHREAD
+
+thread_local std::mutex thread_mutex;
+
+void context_switch(jmp_buf_link* from, jmp_buf_link* to) {
+    to->cond.notify_one();
+    std::unique_lock<std::mutex> lck(thread_mutex, std::adopt_lock);
+    while (g_current_context != from) {
+        from->cond.wait(lck);
+    }
+    lck.release();
+}
+
+#endif
+
 thread_context::thread_context(thread_attributes attr, std::function<void ()> func)
         : _attr(std::move(attr))
         , _func(std::move(func)) {
@@ -50,6 +65,7 @@ thread_context::make_stack() {
 
 void
 thread_context::setup() {
+#ifndef SEASTAR_THREAD_USE_PTHREAD
     // use setcontext() for the initial jump, as it allows us
     // to set up a stack, but continue with longjmp() as it's
     // much faster.
@@ -69,6 +85,12 @@ thread_context::setup() {
     if (setjmp(prev->jmpbuf) == 0) {
         setcontext(&initial_context);
     }
+#else
+    auto prev = g_current_context;
+    g_current_context = &_context;
+    _context.os_thread = std::thread(&thread_context::main, this);
+    context_switch(prev, &_context);
+#endif
 }
 
 void
@@ -79,9 +101,13 @@ thread_context::switch_in() {
     if (_attr.scheduling_group) {
         _attr.scheduling_group->account_start();
     }
+#ifndef SEASTAR_THREAD_USE_PTHREAD
     if (setjmp(prev->jmpbuf) == 0) {
         longjmp(_context.jmpbuf, 1);
     }
+#else
+    context_switch(prev, &_context);
+#endif
 }
 
 void
@@ -90,9 +116,13 @@ thread_context::switch_out() {
         _attr.scheduling_group->account_stop();
     }
     g_current_context = _context.link;
+#ifndef SEASTAR_THREAD_USE_PTHREAD
     if (setjmp(_context.jmpbuf) == 0) {
         longjmp(g_current_context->jmpbuf, 1);
     }
+#else
+    context_switch(&_context, g_current_context);
+#endif
 }
 
 bool
@@ -132,6 +162,9 @@ thread_context::s_main(unsigned int lo, unsigned int hi) {
 
 void
 thread_context::main() {
+#ifdef SEASTAR_THREAD_USE_PTHREAD
+    thread_mutex.lock();
+#endif
     if (_attr.scheduling_group) {
         _attr.scheduling_group->account_start();
     }
@@ -145,7 +178,12 @@ thread_context::main() {
         _attr.scheduling_group->account_stop();
     }
     g_current_context = _context.link;
+#ifndef SEASTAR_THREAD_USE_PTHREAD
     longjmp(g_current_context->jmpbuf, 1);
+#else
+    g_current_context->cond.notify_one();
+    thread_mutex.unlock();
+#endif
 }
 
 namespace thread_impl {
@@ -166,6 +204,9 @@ void init() {
     g_unthreaded_context.link = nullptr;
     g_unthreaded_context.thread = nullptr;
     g_current_context = &g_unthreaded_context;
+#ifdef SEASTAR_THREAD_USE_PTHREAD
+    thread_mutex.lock();
+#endif
 }
 
 }
