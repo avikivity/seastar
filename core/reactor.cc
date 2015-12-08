@@ -1563,6 +1563,9 @@ int reactor::run() {
                 idle = true;
             }
             _mm_pause();
+            if (idle_end - idle_start > 200us) {
+                sleep();
+            }
         } else {
             if (idle) {
                 idle_count += (idle_end - idle_start).count();
@@ -1572,6 +1575,23 @@ int reactor::run() {
         }
     }
     return _return;
+}
+
+void
+reactor::sleep() {
+    for (auto i = _pollers.begin(); i != _pollers.end(); ++i) {
+        auto ok = (*i)->try_enter_interrupt_mode();
+        if (!ok) {
+            while (i != _pollers.begin()) {
+                (*--i)->exit_interrupt_mode();
+            }
+            return;
+        }
+    }
+    wait_and_process(-1, &_active_sigmask);
+    for (auto i = _pollers.rbegin(); i != _pollers.rend(); ++i) {
+        (*i)->exit_interrupt_mode();
+    }
 }
 
 void
@@ -1684,9 +1704,9 @@ reactor::poller::~poller() {
 }
 
 bool
-reactor_backend_epoll::wait_and_process() {
+reactor_backend_epoll::wait_and_process(int timeout, const sigset_t* active_sigmask) {
     std::array<epoll_event, 128> eevt;
-    int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(), 0);
+    int nr = ::epoll_pwait(_epollfd.get(), eevt.data(), eevt.size(), timeout, active_sigmask);
     if (nr == -1 && errno == EINTR) {
         return false; // gdb can cause this
     }
