@@ -75,6 +75,8 @@
 #include <osv/newpoll.hh>
 #endif
 
+#define HACK
+
 using shard_id = unsigned;
 
 namespace scollectd { class registration; }
