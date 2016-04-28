@@ -2155,7 +2155,7 @@ size_t smp_message_queue::process_completions() {
 void smp_message_queue::work_item::report() {
     auto record = [] (std::chrono::steady_clock::time_point t1, std::chrono::steady_clock::time_point t2, std::chrono::microseconds& max, const char* label, bool special = false) {
         auto diff = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1);
-        if (diff > max) {
+        if (diff > max && engine().cpu_id() != 0) {
             max = diff;
             print("saw %d as %d usec\n", label, diff.count());
         }
