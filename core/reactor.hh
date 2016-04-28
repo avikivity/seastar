@@ -314,6 +314,7 @@ class smp_message_queue {
     struct lf_queue_remote {
         reactor* remote;
     };
+#ifndef HACK
     using lf_queue_base = boost::lockfree::spsc_queue<work_item*,
                             boost::lockfree::capacity<queue_length>>;
     // use inheritence to control placement order
@@ -321,6 +322,28 @@ class smp_message_queue {
         lf_queue(reactor* remote) : lf_queue_remote{remote} {}
         void maybe_wakeup();
     };
+#else
+    struct lf_queue {
+        std::atomic<work_item*> q = {};
+        lf_queue(reactor* remote) {}
+        template <typename Iterator>
+        Iterator push(Iterator begin, Iterator end) {
+            work_item* old = nullptr;
+            if (begin != end && q.compare_exchange_weak(old, *begin, std::memory_order_release)) {
+                ++begin;
+            }
+            return begin;
+        }
+        bool pop(work_item*& wi) {
+            wi = q.exchange(nullptr, std::memory_order_acquire);
+            return wi;
+        }
+        size_t pop(work_item** items) {
+            return pop(items[0]);
+        }
+        void maybe_wakeup() {}
+    };
+#endif
     lf_queue _pending;
     lf_queue _completed;
     struct alignas(64) {
