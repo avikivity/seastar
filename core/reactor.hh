@@ -340,7 +340,17 @@ class smp_message_queue {
         size_t _last_rcv_batch = 0;
     };
     struct work_item {
-        virtual ~work_item() {}
+        bool _special = false;
+        std::chrono::steady_clock::time_point _t_created = std::chrono::steady_clock::now();
+        std::chrono::steady_clock::time_point _t_pushed_1;
+        std::chrono::steady_clock::time_point _t_popped_1;
+        std::chrono::steady_clock::time_point _t_process_starts;
+        std::chrono::steady_clock::time_point _t_process_ends;
+        std::chrono::steady_clock::time_point _t_pushed_2;
+        std::chrono::steady_clock::time_point _t_popped_2;
+        std::chrono::steady_clock::time_point _t_completed;
+        virtual ~work_item() { report(); }
+        void report();
         virtual future<> process() = 0;
         virtual void complete() = 0;
     };
@@ -357,11 +367,13 @@ class smp_message_queue {
         virtual future<> process() override {
             try {
                 return futurator::apply(this->_func).then_wrapped([this] (auto&& f) {
+                    _t_process_starts = std::chrono::steady_clock::now();
                     try {
                         _result = f.get();
                     } catch (...) {
                         _ex = std::current_exception();
                     }
+                    _t_process_ends = std::chrono::steady_clock::now();
                 });
             } catch (...) {
                 _ex = std::current_exception();
@@ -369,6 +381,7 @@ class smp_message_queue {
             }
         }
         virtual void complete() override {
+            _t_completed = std::chrono::steady_clock::now();
             if (_result) {
                 _promise.set_value(std::move(*_result));
             } else {

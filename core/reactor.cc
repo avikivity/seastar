@@ -2049,6 +2049,10 @@ smp_message_queue::smp_message_queue(reactor* from, reactor* to)
 void smp_message_queue::move_pending() {
     auto begin = _tx.a.pending_fifo.cbegin();
     auto end = _tx.a.pending_fifo.cend();
+    for (auto x : boost::make_iterator_range(begin, end)) {
+        x->_t_pushed_1 = std::chrono::steady_clock::now();
+        x->_special = true;
+    }
     end = _pending.push(begin, end);
     if (begin == end) {
         return;
@@ -2079,6 +2083,9 @@ void smp_message_queue::flush_response_batch() {
     if (!_completed_fifo.empty()) {
         auto begin = _completed_fifo.cbegin();
         auto end = _completed_fifo.cend();
+        for (auto x : boost::make_iterator_range(begin, end)) {
+            x->_t_pushed_2 = std::chrono::steady_clock::now();
+        }
         end = _completed.push(begin, end);
         if (begin == end) {
             return;
@@ -2115,8 +2122,12 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
         return 0;
     // start prefecthing first item before popping the rest to overlap memory
     // access with potential cache miss the second pop may cause
+    wi->_t_popped_1 = std::chrono::steady_clock::now();
     prefetch<2>(wi);
     auto nr = q.pop(items);
+    for (auto x : boost::make_iterator_range(items, items + nr)) {
+        x->_t_popped_1 = std::chrono::steady_clock::now();
+    }
     std::fill(std::begin(items) + nr, std::begin(items) + nr + PrefetchCnt, nr ? items[nr - 1] : wi);
     unsigned i = 0;
     do {
@@ -2130,6 +2141,7 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
 
 size_t smp_message_queue::process_completions() {
     auto nr = process_queue<prefetch_cnt*2>(_completed, [] (work_item* wi) {
+        wi->_t_popped_2 = std::chrono::steady_clock::now();
         wi->complete();
         delete wi;
     });
@@ -2140,8 +2152,27 @@ size_t smp_message_queue::process_completions() {
     return nr;
 }
 
+void smp_message_queue::work_item::report() {
+    auto record = [] (std::chrono::steady_clock::time_point t1, std::chrono::steady_clock::time_point t2, std::chrono::microseconds& max, const char* label, bool special = false) {
+        auto diff = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1);
+        if (diff > max) {
+            max = diff;
+            print("saw %d as %d usec\n", label, diff.count());
+        }
+    };
+    static thread_local std::chrono::microseconds tx_pending, tx, pre_process, processed, rx_pending, rx;
+    record(_t_created, _t_pushed_1, tx_pending, "tx-pending");
+    record(_t_pushed_1, _t_popped_1, tx, "tx", _special);
+    record(_t_popped_1, _t_process_starts, pre_process, "pre-process");
+    record(_t_process_starts, _t_process_ends, processed, "processed");
+    record(_t_process_ends, _t_pushed_2, rx_pending, "rx-pending");
+    record(_t_pushed_2, _t_popped_2, rx, "rx");
+}
+
 void smp_message_queue::flush_request_batch() {
-    move_pending();
+    if (!_tx.a.pending_fifo.empty()) {
+        move_pending();
+    }
 }
 
 size_t smp_message_queue::process_incoming() {
