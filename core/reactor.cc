@@ -1896,7 +1896,13 @@ bool
 reactor::poll_once() {
     bool work = false;
     for (auto c : _pollers) {
+        auto t1 = std::chrono::steady_clock::now();
         work |= c->poll();
+        auto t2 = std::chrono::steady_clock::now();
+        auto d = t2 - t1;
+        if (d > 10ms) {
+            print("poller %s took %d us\n", typeid(*c).name(), std::chrono::duration_cast<std::chrono::microseconds>(d).count());
+        }
     }
 
     return work;
@@ -2124,6 +2130,7 @@ template<size_t PrefetchCnt, typename Func>
 size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
     // copy batch to local memory in order to minimize
     // time in which cross-cpu data is accessed
+    auto t1 = std::chrono::steady_clock::now();
     work_item* items[queue_length + PrefetchCnt];
     work_item* wi;
     if (!q.pop(wi))
@@ -2143,6 +2150,11 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
         process(wi);
         wi = items[i++];
     } while(i <= nr);
+    auto t2 = std::chrono::steady_clock::now();
+
+    if (t2 - t1 > 10ms) {
+        print("process_queue took %d ms for %d items\n", std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count(), nr + 1);
+    }
 
     return nr + 1;
 }
