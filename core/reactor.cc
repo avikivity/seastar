@@ -1490,6 +1490,7 @@ reactor::register_collectd_metrics() {
 void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks) {
     _task_quota_finished = false;
     future_avail_count = 0;
+    auto t01 = std::chrono::steady_clock::now();
     while (!tasks.empty() && !_task_quota_finished) {
         auto tsk = std::move(tasks.front());
         tasks.pop_front();
@@ -1503,6 +1504,11 @@ void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks) {
         tsk.reset();
         ++_tasks_processed;
         std::atomic_signal_fence(std::memory_order_relaxed); // for _task_quota_finished flag
+    }
+    auto t02 = std::chrono::steady_clock::now();
+    if (t02 - t01 > 10ms) {
+        print("run_tasks took %d usec\n",
+                std::chrono::duration_cast<std::chrono::microseconds>(t02 - t01).count());
     }
 }
 
