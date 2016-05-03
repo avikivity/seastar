@@ -1493,7 +1493,13 @@ void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks) {
     while (!tasks.empty() && !_task_quota_finished) {
         auto tsk = std::move(tasks.front());
         tasks.pop_front();
+        auto t1 = std::chrono::steady_clock::now();
         tsk->run();
+        auto t2 = std::chrono::steady_clock::now();
+        if (t2 - t1 > 10ms) {
+            print("task %s took %d usec\n", typeid(*tsk.get()).name(),
+                    std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count());
+        }
         tsk.reset();
         ++_tasks_processed;
         std::atomic_signal_fence(std::memory_order_relaxed); // for _task_quota_finished flag
