@@ -2210,7 +2210,7 @@ size_t smp_message_queue::process_completions() {
 }
 
 void smp_message_queue::work_item::report() {
-    auto record = [this] (std::chrono::steady_clock::time_point t1, std::chrono::steady_clock::time_point t2, std::chrono::microseconds& max, const char* label, bool special = false) {
+    auto record = [this] (std::chrono::steady_clock::time_point& t1, std::chrono::steady_clock::time_point& t2, std::chrono::microseconds& max, const char* label, bool special = false) {
         auto usec = [] (auto dur) { return std::chrono::duration_cast<std::chrono::microseconds>(dur).count(); };
         auto diff = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1);
         if (diff > std::chrono::microseconds(10000)) {
