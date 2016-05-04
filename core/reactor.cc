@@ -2173,12 +2173,16 @@ smp_message_queue::lf_queue::maybe_wakeup() {
 #endif
 
 template<size_t PrefetchCnt, typename Func>
-size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
+size_t smp_message_queue::process_queue(lf_queue& q, Func process, bool interesting) {
+    auto usec = [] (auto dur) {
+        return std::chrono::duration_cast<std::chrono::microseconds>(dur).count();
+    };
+
     // copy batch to local memory in order to minimize
     // time in which cross-cpu data is accessed
     auto t1 = tsc_clock::now();
     auto rx_visited = t1;
-    if (rx_visited - q._rx_visited > 4ms) {
+    if (rx_visited - q._rx_visited > 4ms && interesting) {
         dprint("did not rx visit queue for at least 4ms\n");
     }
     q._rx_visited = rx_visited;
@@ -2188,6 +2192,7 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
     if (!q.pop(wi)) {
         last_req_queue_rx_poll = t1;
         auto t2 = tsc_clock::now();
+        q._rx_visited_but_empty = rx_visited;
 
         if (t2 - t1 > 10ms) {
             dprint("process_queue took %d ms for no items\n", std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count());
@@ -2198,6 +2203,9 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
     // start prefecthing first item before popping the rest to overlap memory
     // access with potential cache miss the second pop may cause
     wi->_t_popped_1 = tsc_clock::now();
+    if (wi->_t_popped_1 - wi->_t_pushed_1_after < 10ms && interesting) {
+        dprint("pushed->popped %d usec; last empty rx -> popped %d usec\n", usec(wi->_t_popped_1 - wi->_t_pushed_1_after), usec(wi->_t_popped_1 - q._rx_visited_but_empty));
+    }
     wi->_t_last_req_queue_rx_poll = last_req_queue_rx_poll;
     last_req_queue_rx_poll = t1;
     //prefetch<2>(wi);
@@ -2268,7 +2276,7 @@ size_t smp_message_queue::process_incoming() {
         wi->process().then([this, wi] {
             respond(wi);
         });
-    });
+    }, true);
     _received += nr;
     _last_rcv_batch = nr;
     return nr;

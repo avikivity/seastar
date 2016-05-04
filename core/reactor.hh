@@ -345,7 +345,7 @@ class smp_message_queue {
     };
 #else
     struct lf_queue {
-        tsc_clock::time_point _tx_visited, _rx_visited;
+        tsc_clock::time_point _tx_visited, _rx_visited, _rx_visited_but_empty;
         std::atomic<work_item*> q = {};
         lf_queue(reactor* remote) {}
         template <typename Iterator>
@@ -462,7 +462,7 @@ public:
     }
     void start(unsigned cpuid);
     template<size_t PrefetchCnt, typename Func>
-    size_t process_queue(lf_queue& q, Func process);
+    size_t process_queue(lf_queue& q, Func process, bool interesting = false);
     size_t process_incoming();
     size_t process_completions();
 private:
