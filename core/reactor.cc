@@ -2307,8 +2307,8 @@ void thread_pool::work() {
             auto wi = *p;
             wi->process();
             inter_thread_wq._completed.push(wi);
+            pthread_kill(_notify, SIGUSR1);
         }
-        pthread_kill(_notify, SIGUSR1);
     }
 }
 
