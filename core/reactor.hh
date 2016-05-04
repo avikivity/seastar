@@ -77,7 +77,7 @@
 
 #define HACK
 
-
+#if 0
 struct tsc_clock {
     using rep = int64_t;
     using period = std::ratio<int64_t(1), int64_t(2397000000)>;
@@ -89,6 +89,12 @@ struct tsc_clock {
         return time_point(duration((uint64_t(d) << 32) + a));
     }
 };
+#else
+
+using tsc_clock = std::chrono::high_resolution_clock;
+
+#endif
+
 
 using shard_id = unsigned;
 
