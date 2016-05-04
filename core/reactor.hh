@@ -388,6 +388,7 @@ class smp_message_queue {
         bool _special = false;
         tsc_clock::time_point _t_created = tsc_clock::now();
         tsc_clock::time_point _t_pushed_1;
+        tsc_clock::time_point _t_pushed_1_after;
         tsc_clock::time_point _t_popped_1;
         tsc_clock::time_point _t_process_starts;
         tsc_clock::time_point _t_process_ends;

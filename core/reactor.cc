@@ -2090,12 +2090,13 @@ smp_message_queue::smp_message_queue(reactor* from, reactor* to)
 }
 
 void smp_message_queue::move_pending() {
-    auto begin = _tx.a.pending_fifo.cbegin();
-    auto end = _tx.a.pending_fifo.cend();
-    for (auto x : boost::make_iterator_range(begin, end)) {
-        x->_t_pushed_1 = tsc_clock::now();
+    auto now = tsc_clock::now();
+    for (auto x : _tx.a.pending_fifo) {
+        x->_t_pushed_1 = x->_t_pushed_1_after = now;
         x->_special = true;
     }
+    auto begin = _tx.a.pending_fifo.cbegin();
+    auto end = _tx.a.pending_fifo.cend();
     auto tx_visited = tsc_clock::now();
     if (tx_visited - _pending._tx_visited > 4ms) {
         dprint("move_pending did not visit tx for %d us\n", std::chrono::duration_cast<std::chrono::microseconds>(tx_visited - _pending._tx_visited).count());
@@ -2104,6 +2105,10 @@ void smp_message_queue::move_pending() {
     end = _pending.push(begin, end);
     if (begin == end) {
         return;
+    }
+    now = tsc_clock::now();
+    for (auto x : boost::make_iterator_range(begin, end)) {
+        x->_t_pushed_1_after = now;
     }
     auto nr = end - begin;
     _pending.maybe_wakeup();
@@ -2236,7 +2241,7 @@ void smp_message_queue::work_item::report() {
         if (diff > std::chrono::microseconds(10000)) {
             max = diff;
             dprint("saw %d as %d usec special %d\n", label, diff.count(), special);
-            if (&t1 == &_t_pushed_1) {
+            if (&t1 == &_t_pushed_1_after) {
                 dprint("times since last_req_queue_rx_poll: first %d second %d\n",
                        usec(t1 - _t_last_req_queue_rx_poll), usec(t2 - _t_last_req_queue_rx_poll));
             }
@@ -2244,7 +2249,8 @@ void smp_message_queue::work_item::report() {
     };
     static thread_local std::chrono::microseconds tx_pending, tx, pre_process, processed, rx_pending, rx;
     record(_t_created, _t_pushed_1, tx_pending, "tx-pending");
-    record(_t_pushed_1, _t_popped_1, tx, "tx", _special);
+    record(_t_pushed_1, _t_pushed_1_after, tx, "tx-pre", _special);
+    record(_t_pushed_1_after, _t_popped_1, tx, "tx", _special);
     record(_t_popped_1, _t_process_starts, pre_process, "pre-process");
     record(_t_process_starts, _t_process_ends, processed, "processed");
     record(_t_process_ends, _t_pushed_2, rx_pending, "rx-pending");
