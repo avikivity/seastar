@@ -2096,6 +2096,11 @@ void smp_message_queue::move_pending() {
         x->_t_pushed_1 = std::chrono::steady_clock::now();
         x->_special = true;
     }
+    auto tx_visited = std::chrono::steady_clock::now();
+    if (tx_visited - _pending._tx_visited > 4ms) {
+        dprint("move_pending did not visit tx for > 4ms\n");
+    }
+    _pending._tx_visited = tx_visited;
     end = _pending.push(begin, end);
     if (begin == end) {
         return;
@@ -2129,6 +2134,11 @@ void smp_message_queue::flush_response_batch() {
         for (auto x : boost::make_iterator_range(begin, end)) {
             x->_t_pushed_2 = std::chrono::steady_clock::now();
         }
+        auto tx_visited = std::chrono::steady_clock::now();
+        if (tx_visited - _completed._tx_visited > 4ms) {
+            dprint("move_pending did not visit tx for > 4ms\n");
+        }
+        _completed._tx_visited = tx_visited;
         end = _completed.push(begin, end);
         if (begin == end) {
             return;
@@ -2162,6 +2172,11 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
     // copy batch to local memory in order to minimize
     // time in which cross-cpu data is accessed
     auto t1 = std::chrono::steady_clock::now();
+    auto rx_visited = t1;
+    if (rx_visited - q._rx_visited > 4ms) {
+        dprint("did not rx visit queue for at least 4ms\n");
+    }
+    q._rx_visited = rx_visited;
     static thread_local std::chrono::steady_clock::time_point last_req_queue_rx_poll;
     work_item* items[queue_length + PrefetchCnt];
     work_item* wi;

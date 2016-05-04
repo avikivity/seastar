@@ -326,6 +326,7 @@ class smp_message_queue {
     };
 #else
     struct lf_queue {
+        std::chrono::steady_clock::time_point _tx_visited, _rx_visited;
         std::atomic<work_item*> q = {};
         lf_queue(reactor* remote) {}
         template <typename Iterator>
