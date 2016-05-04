@@ -2203,7 +2203,7 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process, bool interest
     // start prefecthing first item before popping the rest to overlap memory
     // access with potential cache miss the second pop may cause
     wi->_t_popped_1 = tsc_clock::now();
-    if (wi->_t_popped_1 - wi->_t_pushed_1_after < 10ms && interesting) {
+    if (wi->_t_popped_1 - wi->_t_pushed_1_after > 10ms && interesting) {
         dprint("pushed->popped %d usec; last empty rx -> popped %d usec\n", usec(wi->_t_popped_1 - wi->_t_pushed_1_after), usec(wi->_t_popped_1 - q._rx_visited_but_empty));
     }
     wi->_t_last_req_queue_rx_poll = last_req_queue_rx_poll;
