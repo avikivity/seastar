@@ -1854,6 +1854,7 @@ int reactor::run() {
         }
 
         if (!poll_once() && _pending_tasks.empty()) {
+            auto t1 = std::chrono::steady_clock::now();
             idle_end = steady_clock_type::now();
             if (!idle) {
                 idle_start = idle_end;
@@ -1864,6 +1865,11 @@ int reactor::run() {
                 sleep();
                 // We may have slept for a while, so freshen idle_end
                 idle_end = steady_clock_type::now();
+            }
+            auto t2 = std::chrono::steady_clock::now();
+            auto d = t2 - t1;
+            if (d > 2ms) {
+                dprint("idle took %d usec\n", std::chrono::duration_cast<std::chrono::microseconds>(d).count());
             }
         } else {
             if (idle) {
