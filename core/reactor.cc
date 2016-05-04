@@ -2136,7 +2136,7 @@ void smp_message_queue::flush_response_batch() {
         }
         auto tx_visited = std::chrono::steady_clock::now();
         if (tx_visited - _completed._tx_visited > 4ms) {
-            dprint("move_pending did not visit tx for > 4ms\n");
+            dprint("flush_response_batch did not visit tx for > 4ms\n");
         }
         _completed._tx_visited = tx_visited;
         end = _completed.push(begin, end);
