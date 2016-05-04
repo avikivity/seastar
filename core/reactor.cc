@@ -1918,7 +1918,7 @@ reactor::poll_once() {
     static thread_local std::chrono::steady_clock::time_point last_poll;
     auto t01 = std::chrono::steady_clock::now();
     if (t01 - last_poll > 5ms) {
-        dprint("time since last poll too large");
+        dprint("time since last poll too large\n");
     }
     last_poll = t01;
     for (auto c : _pollers) {
