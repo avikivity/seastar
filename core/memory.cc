@@ -625,7 +625,7 @@ bool cpu_pages::initialize() {
     auto size = 32 << 20;  // Small size for bootstrap
     auto r = ::mmap(base, size,
             PROT_READ | PROT_WRITE,
-            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_POPULATE,
             -1, 0);
     if (r == MAP_FAILED) {
         abort();
@@ -651,7 +651,7 @@ allocate_anonymous_memory(optional<void*> where, size_t how_much) {
     return mmap_anonymous(where.value_or(nullptr),
             how_much,
             PROT_READ | PROT_WRITE,
-            MAP_PRIVATE | (where ? MAP_FIXED : 0));
+            MAP_PRIVATE | (where ? MAP_FIXED : 0) | MAP_POPULATE);
 }
 
 mmap_area
@@ -661,7 +661,7 @@ allocate_hugetlbfs_memory(file_desc& fd, optional<void*> where, size_t how_much)
     auto ret = fd.map(
             how_much,
             PROT_READ | PROT_WRITE,
-            MAP_SHARED | MAP_POPULATE | (where ? MAP_FIXED : 0),
+            MAP_SHARED | MAP_POPULATE | (where ? MAP_FIXED : 0) | MAP_POPULATE,
             pos,
             where.value_or(nullptr));
     return ret;
