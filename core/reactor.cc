@@ -84,6 +84,13 @@ using namespace std::chrono_literals;
 
 using namespace net;
 
+
+template <typename... Args>
+void dprint(const char* fmt, Args&&... args) {
+    print("%12d %d ", std::chrono::steady_clock::now().time_since_epoch().count(), local_engine->cpu_id());
+    print(fmt, std::forward<Args>(args)...);
+}
+
 std::atomic<lowres_clock::rep> lowres_clock::_now;
 constexpr std::chrono::milliseconds lowres_clock::_granularity;
 static thread_local uint64_t logging_failures = 0;
@@ -1498,7 +1505,7 @@ void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks) {
         tsk->run();
         auto t2 = std::chrono::steady_clock::now();
         if (t2 - t1 > 10ms) {
-            print("task %s took %d usec\n", typeid(*tsk.get()).name(),
+            dprint("task %s took %d usec\n", typeid(*tsk.get()).name(),
                     std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count());
         }
         tsk.reset();
@@ -1507,7 +1514,7 @@ void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks) {
     }
     auto t02 = std::chrono::steady_clock::now();
     if (t02 - t01 > 10ms) {
-        print("run_tasks took %d usec\n",
+        dprint("run_tasks took %d usec\n",
                 std::chrono::duration_cast<std::chrono::microseconds>(t02 - t01).count());
     }
 }
@@ -1907,7 +1914,7 @@ reactor::poll_once() {
         auto t2 = std::chrono::steady_clock::now();
         auto d = t2 - t1;
         if (d > 10ms) {
-            print("poller %s took %d us\n", typeid(*c).name(), std::chrono::duration_cast<std::chrono::microseconds>(d).count());
+            dprint("poller %s took %d us\n", typeid(*c).name(), std::chrono::duration_cast<std::chrono::microseconds>(d).count());
         }
     }
 
@@ -2159,7 +2166,7 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
     auto t2 = std::chrono::steady_clock::now();
 
     if (t2 - t1 > 10ms) {
-        print("process_queue took %d ms for %d items\n", std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count(), nr + 1);
+        dprint("process_queue took %d ms for %d items\n", std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count(), nr + 1);
     }
 
     return nr + 1;
@@ -2183,7 +2190,7 @@ void smp_message_queue::work_item::report() {
         auto diff = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1);
         if (diff > std::chrono::microseconds(10000) && engine().cpu_id() != 0) {
             max = diff;
-            print("saw %d as %d usec special %d\n", label, diff.count(), special);
+            dprint("saw %d as %d usec special %d\n", label, diff.count(), special);
         }
     };
     static thread_local std::chrono::microseconds tx_pending, tx, pre_process, processed, rx_pending, rx;
