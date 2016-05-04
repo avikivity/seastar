@@ -351,13 +351,17 @@ class smp_message_queue {
         template <typename Iterator>
         Iterator push(Iterator begin, Iterator end) {
             work_item* old = nullptr;
+            asm("clflush %0" : : "m"(*(char*)&q));
             if (begin != end && q.compare_exchange_strong(old, *begin, std::memory_order_release)) {
                 ++begin;
             }
+            asm("clflush %0" : : "m"(*(char*)&q));
             return begin;
         }
         bool pop(work_item*& wi) {
+            asm("clflush %0" : : "m"(*(char*)&q));
             wi = q.exchange(nullptr, std::memory_order_acquire);
+            asm("clflush %0" : : "m"(*(char*)&q));
             return wi;
         }
         size_t pop(work_item** items) {
