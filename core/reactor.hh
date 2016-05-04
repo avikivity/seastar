@@ -332,7 +332,7 @@ class smp_message_queue {
         template <typename Iterator>
         Iterator push(Iterator begin, Iterator end) {
             work_item* old = nullptr;
-            if (begin != end && q.compare_exchange_weak(old, *begin, std::memory_order_release)) {
+            if (begin != end && q.compare_exchange_strong(old, *begin, std::memory_order_release)) {
                 ++begin;
             }
             return begin;
