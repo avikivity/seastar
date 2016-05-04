@@ -1889,6 +1889,7 @@ int reactor::run() {
 
 void
 reactor::sleep() {
+    dprint("sleep sleep sleep sleep\n");
     for (auto i = _pollers.begin(); i != _pollers.end(); ++i) {
         auto ok = (*i)->try_enter_interrupt_mode();
         if (!ok) {
@@ -1914,6 +1915,7 @@ reactor::start_epoll() {
 bool
 reactor::poll_once() {
     bool work = false;
+    auto t01 = std::chrono::steady_clock::now();
     for (auto c : _pollers) {
         auto t1 = std::chrono::steady_clock::now();
         work |= c->poll();
@@ -1922,6 +1924,11 @@ reactor::poll_once() {
         if (d > 10ms) {
             dprint("poller %s took %d us\n", typeid(*c).name(), std::chrono::duration_cast<std::chrono::microseconds>(d).count());
         }
+    }
+    auto t02 = std::chrono::steady_clock::now();
+    auto d = t02 - t01;
+    if (d > 4ms) {
+        dprint("poll_once() took %d us\n", std::chrono::duration_cast<std::chrono::microseconds>(d).count());
     }
 
     return work;
