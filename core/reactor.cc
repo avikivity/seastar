@@ -2252,9 +2252,9 @@ void smp_message_queue::work_item::report() {
 }
 
 void smp_message_queue::flush_request_batch() {
-    if (!_tx.a.pending_fifo.empty()) {
+    //if (!_tx.a.pending_fifo.empty()) {
         move_pending();
-    }
+    //}
 }
 
 size_t smp_message_queue::process_incoming() {
