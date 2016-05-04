@@ -443,7 +443,7 @@ class smp_message_queue {
         ~tx_side() {}
         void init() { new (&a) aa; }
         struct aa {
-            std::deque<work_item*> pending_fifo;
+            std::vector<work_item*> pending_fifo;
         } a;
     } _tx;
     std::vector<work_item*> _completed_fifo;
