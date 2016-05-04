@@ -2098,7 +2098,7 @@ void smp_message_queue::move_pending() {
     }
     auto tx_visited = std::chrono::steady_clock::now();
     if (tx_visited - _pending._tx_visited > 4ms) {
-        dprint("move_pending did not visit tx for %d us\n", std::chrono::duration_cast<std::chrono::microseconds>(tx_visited - _pending._tx_visited));
+        dprint("move_pending did not visit tx for %d us\n", std::chrono::duration_cast<std::chrono::microseconds>(tx_visited - _pending._tx_visited).count());
     }
     _pending._tx_visited = tx_visited;
     end = _pending.push(begin, end);
