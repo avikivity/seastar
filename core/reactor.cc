@@ -2216,8 +2216,10 @@ void smp_message_queue::work_item::report() {
         if (diff > std::chrono::microseconds(10000)) {
             max = diff;
             dprint("saw %d as %d usec special %d\n", label, diff.count(), special);
-            dprint("times since last_req_queue_rx_poll: first %d second %d\n",
-                   usec(t1 - _t_last_req_queue_rx_poll), usec(t2 - _t_last_req_queue_rx_poll));
+            if (&t1 == &_t_pushed_1) {
+                dprint("times since last_req_queue_rx_poll: first %d second %d\n",
+                       usec(t1 - _t_last_req_queue_rx_poll), usec(t2 - _t_last_req_queue_rx_poll));
+            }
         }
     };
     static thread_local std::chrono::microseconds tx_pending, tx, pre_process, processed, rx_pending, rx;
