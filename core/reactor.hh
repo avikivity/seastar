@@ -77,6 +77,19 @@
 
 #define HACK
 
+
+struct tsc_clock {
+    using rep = int64_t;
+    using period = std::ratio<int64_t(1), int64_t(2397000000)>;
+    using duration = std::chrono::duration<rep, period>;
+    using time_point = std::chrono::time_point<tsc_clock>;
+    static time_point now() {
+        uint32_t a, d;
+        asm volatile("rdtsc" : "=a"(a), "=d"(d));
+        return time_point(duration((uint64_t(d) << 32) + a));
+    }
+};
+
 using shard_id = unsigned;
 
 namespace scollectd { class registration; }
@@ -326,7 +339,7 @@ class smp_message_queue {
     };
 #else
     struct lf_queue {
-        std::chrono::steady_clock::time_point _tx_visited, _rx_visited;
+        tsc_clock::time_point _tx_visited, _rx_visited;
         std::atomic<work_item*> q = {};
         lf_queue(reactor* remote) {}
         template <typename Iterator>
@@ -367,15 +380,15 @@ class smp_message_queue {
     };
     struct work_item {
         bool _special = false;
-        std::chrono::steady_clock::time_point _t_created = std::chrono::steady_clock::now();
-        std::chrono::steady_clock::time_point _t_pushed_1;
-        std::chrono::steady_clock::time_point _t_popped_1;
-        std::chrono::steady_clock::time_point _t_process_starts;
-        std::chrono::steady_clock::time_point _t_process_ends;
-        std::chrono::steady_clock::time_point _t_pushed_2;
-        std::chrono::steady_clock::time_point _t_popped_2;
-        std::chrono::steady_clock::time_point _t_completed;
-        std::chrono::steady_clock::time_point _t_last_req_queue_rx_poll;
+        tsc_clock::time_point _t_created = tsc_clock::now();
+        tsc_clock::time_point _t_pushed_1;
+        tsc_clock::time_point _t_popped_1;
+        tsc_clock::time_point _t_process_starts;
+        tsc_clock::time_point _t_process_ends;
+        tsc_clock::time_point _t_pushed_2;
+        tsc_clock::time_point _t_popped_2;
+        tsc_clock::time_point _t_completed;
+        tsc_clock::time_point _t_last_req_queue_rx_poll;
         virtual ~work_item() { report(); }
         void report();
         virtual future<> process() = 0;
@@ -394,13 +407,13 @@ class smp_message_queue {
         virtual future<> process() override {
             try {
                 return futurator::apply(this->_func).then_wrapped([this] (auto&& f) {
-                    _t_process_starts = std::chrono::steady_clock::now();
+                    _t_process_starts = tsc_clock::now();
                     try {
                         _result = f.get();
                     } catch (...) {
                         _ex = std::current_exception();
                     }
-                    _t_process_ends = std::chrono::steady_clock::now();
+                    _t_process_ends = tsc_clock::now();
                 });
             } catch (...) {
                 _ex = std::current_exception();
@@ -408,7 +421,7 @@ class smp_message_queue {
             }
         }
         virtual void complete() override {
-            _t_completed = std::chrono::steady_clock::now();
+            _t_completed = tsc_clock::now();
             if (_result) {
                 _promise.set_value(std::move(*_result));
             } else {

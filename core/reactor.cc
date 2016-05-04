@@ -87,7 +87,7 @@ using namespace net;
 
 template <typename... Args>
 void dprint(const char* fmt, Args&&... args) {
-    print("%12d %d ", std::chrono::steady_clock::now().time_since_epoch().count(), local_engine->cpu_id());
+    print("%12d %d ", tsc_clock::now().time_since_epoch().count(), local_engine->cpu_id());
     print(fmt, std::forward<Args>(args)...);
 }
 
@@ -747,7 +747,7 @@ io_queue::priority_class_data& io_queue::find_or_create_class(const io_priority_
 template <typename Func>
 future<io_event>
 io_queue::queue_request(shard_id coordinator, const io_priority_class& pc, size_t len, Func prepare_io) {
-    auto start = std::chrono::steady_clock::now();
+    auto start = tsc_clock::now();
     return smp::submit_to(coordinator, [start, &pc, len, prepare_io = std::move(prepare_io), owner = engine().cpu_id()] {
         auto& queue = *(engine()._io_queue);
         unsigned weight = 1 + len/(16 << 10);
@@ -759,7 +759,7 @@ io_queue::queue_request(shard_id coordinator, const io_priority_class& pc, size_
         pclass.nr_queued++;
         return queue._fq.queue(pclass.ptr, weight, [&pclass, start, prepare_io = std::move(prepare_io)] {
             pclass.nr_queued--;
-            pclass.queue_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - start);
+            pclass.queue_time = std::chrono::duration_cast<std::chrono::duration<double>>(tsc_clock::now() - start);
             return engine().submit_io(std::move(prepare_io));
         });
     });
@@ -1497,13 +1497,13 @@ reactor::register_collectd_metrics() {
 void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks) {
     _task_quota_finished = false;
     future_avail_count = 0;
-    auto t01 = std::chrono::steady_clock::now();
+    auto t01 = tsc_clock::now();
     while (!tasks.empty() && !_task_quota_finished) {
         auto tsk = std::move(tasks.front());
         tasks.pop_front();
-        auto t1 = std::chrono::steady_clock::now();
+        auto t1 = tsc_clock::now();
         tsk->run();
-        auto t2 = std::chrono::steady_clock::now();
+        auto t2 = tsc_clock::now();
         if (t2 - t1 > 10ms) {
             dprint("task %s took %d usec\n", typeid(*tsk.get()).name(),
                     std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count());
@@ -1512,7 +1512,7 @@ void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks) {
         ++_tasks_processed;
         std::atomic_signal_fence(std::memory_order_relaxed); // for _task_quota_finished flag
     }
-    auto t02 = std::chrono::steady_clock::now();
+    auto t02 = tsc_clock::now();
     if (t02 - t01 > 10ms) {
         dprint("run_tasks took %d usec\n",
                 std::chrono::duration_cast<std::chrono::microseconds>(t02 - t01).count());
@@ -1854,7 +1854,7 @@ int reactor::run() {
         }
 
         if (!poll_once() && _pending_tasks.empty()) {
-            auto t1 = std::chrono::steady_clock::now();
+            auto t1 = tsc_clock::now();
             idle_end = steady_clock_type::now();
             if (!idle) {
                 idle_start = idle_end;
@@ -1866,7 +1866,7 @@ int reactor::run() {
                 // We may have slept for a while, so freshen idle_end
                 idle_end = steady_clock_type::now();
             }
-            auto t2 = std::chrono::steady_clock::now();
+            auto t2 = tsc_clock::now();
             auto d = t2 - t1;
             if (d > 2ms) {
                 dprint("idle took %d usec\n", std::chrono::duration_cast<std::chrono::microseconds>(d).count());
@@ -1915,22 +1915,22 @@ reactor::start_epoll() {
 bool
 reactor::poll_once() {
     bool work = false;
-    static thread_local std::chrono::steady_clock::time_point last_poll;
-    auto t01 = std::chrono::steady_clock::now();
+    static thread_local tsc_clock::time_point last_poll;
+    auto t01 = tsc_clock::now();
     if (t01 - last_poll > 5ms) {
         dprint("time since last poll too large\n");
     }
     last_poll = t01;
     for (auto c : _pollers) {
-        auto t1 = std::chrono::steady_clock::now();
+        auto t1 = tsc_clock::now();
         work |= c->poll();
-        auto t2 = std::chrono::steady_clock::now();
+        auto t2 = tsc_clock::now();
         auto d = t2 - t1;
         if (d > 10ms) {
             dprint("poller %s took %d us\n", typeid(*c).name(), std::chrono::duration_cast<std::chrono::microseconds>(d).count());
         }
     }
-    auto t02 = std::chrono::steady_clock::now();
+    auto t02 = tsc_clock::now();
     auto d = t02 - t01;
     if (d > 4ms) {
         dprint("poll_once() took %d us\n", std::chrono::duration_cast<std::chrono::microseconds>(d).count());
@@ -2093,10 +2093,10 @@ void smp_message_queue::move_pending() {
     auto begin = _tx.a.pending_fifo.cbegin();
     auto end = _tx.a.pending_fifo.cend();
     for (auto x : boost::make_iterator_range(begin, end)) {
-        x->_t_pushed_1 = std::chrono::steady_clock::now();
+        x->_t_pushed_1 = tsc_clock::now();
         x->_special = true;
     }
-    auto tx_visited = std::chrono::steady_clock::now();
+    auto tx_visited = tsc_clock::now();
     if (tx_visited - _pending._tx_visited > 4ms) {
         dprint("move_pending did not visit tx for %d us\n", std::chrono::duration_cast<std::chrono::microseconds>(tx_visited - _pending._tx_visited).count());
     }
@@ -2132,9 +2132,9 @@ void smp_message_queue::flush_response_batch() {
         auto begin = _completed_fifo.cbegin();
         auto end = _completed_fifo.cend();
         for (auto x : boost::make_iterator_range(begin, end)) {
-            x->_t_pushed_2 = std::chrono::steady_clock::now();
+            x->_t_pushed_2 = tsc_clock::now();
         }
-        auto tx_visited = std::chrono::steady_clock::now();
+        auto tx_visited = tsc_clock::now();
         if (tx_visited - _completed._tx_visited > 4ms) {
             dprint("flush_response_batch did not visit tx for > 4ms\n");
         }
@@ -2171,18 +2171,18 @@ template<size_t PrefetchCnt, typename Func>
 size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
     // copy batch to local memory in order to minimize
     // time in which cross-cpu data is accessed
-    auto t1 = std::chrono::steady_clock::now();
+    auto t1 = tsc_clock::now();
     auto rx_visited = t1;
     if (rx_visited - q._rx_visited > 4ms) {
         dprint("did not rx visit queue for at least 4ms\n");
     }
     q._rx_visited = rx_visited;
-    static thread_local std::chrono::steady_clock::time_point last_req_queue_rx_poll;
+    static thread_local tsc_clock::time_point last_req_queue_rx_poll;
     work_item* items[queue_length + PrefetchCnt];
     work_item* wi;
     if (!q.pop(wi)) {
         last_req_queue_rx_poll = t1;
-        auto t2 = std::chrono::steady_clock::now();
+        auto t2 = tsc_clock::now();
 
         if (t2 - t1 > 10ms) {
             dprint("process_queue took %d ms for no items\n", std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count());
@@ -2192,13 +2192,13 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
     }
     // start prefecthing first item before popping the rest to overlap memory
     // access with potential cache miss the second pop may cause
-    wi->_t_popped_1 = std::chrono::steady_clock::now();
+    wi->_t_popped_1 = tsc_clock::now();
     wi->_t_last_req_queue_rx_poll = last_req_queue_rx_poll;
     last_req_queue_rx_poll = t1;
     //prefetch<2>(wi);
     auto nr = q.pop(items);
     for (auto x : boost::make_iterator_range(items, items + nr)) {
-        x->_t_popped_1 = std::chrono::steady_clock::now();
+        x->_t_popped_1 = tsc_clock::now();
     }
     std::fill(std::begin(items) + nr, std::begin(items) + nr + PrefetchCnt, nr ? items[nr - 1] : wi);
     unsigned i = 0;
@@ -2207,7 +2207,7 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
         process(wi);
         wi = items[i++];
     } while(i <= nr);
-    auto t2 = std::chrono::steady_clock::now();
+    auto t2 = tsc_clock::now();
 
     if (t2 - t1 > 10ms) {
         dprint("process_queue took %d ms for %d items\n", std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count(), nr + 1);
@@ -2218,7 +2218,7 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
 
 size_t smp_message_queue::process_completions() {
     auto nr = process_queue<prefetch_cnt*2>(_completed, [] (work_item* wi) {
-        wi->_t_popped_2 = std::chrono::steady_clock::now();
+        wi->_t_popped_2 = tsc_clock::now();
         wi->complete();
         delete wi;
     });
@@ -2230,7 +2230,7 @@ size_t smp_message_queue::process_completions() {
 }
 
 void smp_message_queue::work_item::report() {
-    auto record = [this] (std::chrono::steady_clock::time_point& t1, std::chrono::steady_clock::time_point& t2, std::chrono::microseconds& max, const char* label, bool special = false) {
+    auto record = [this] (tsc_clock::time_point& t1, tsc_clock::time_point& t2, std::chrono::microseconds& max, const char* label, bool special = false) {
         auto usec = [] (auto dur) { return std::chrono::duration_cast<std::chrono::microseconds>(dur).count(); };
         auto diff = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1);
         if (diff > std::chrono::microseconds(10000)) {
