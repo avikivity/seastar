@@ -2180,7 +2180,7 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
     wi->_t_popped_1 = std::chrono::steady_clock::now();
     wi->_t_last_req_queue_rx_poll = last_req_queue_rx_poll;
     last_req_queue_rx_poll = t1;
-    prefetch<2>(wi);
+    //prefetch<2>(wi);
     auto nr = q.pop(items);
     for (auto x : boost::make_iterator_range(items, items + nr)) {
         x->_t_popped_1 = std::chrono::steady_clock::now();
@@ -2188,7 +2188,7 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
     std::fill(std::begin(items) + nr, std::begin(items) + nr + PrefetchCnt, nr ? items[nr - 1] : wi);
     unsigned i = 0;
     do {
-        prefetch_n<2>(std::begin(items) + i, std::begin(items) + i + PrefetchCnt);
+        //prefetch_n<2>(std::begin(items) + i, std::begin(items) + i + PrefetchCnt);
         process(wi);
         wi = items[i++];
     } while(i <= nr);
