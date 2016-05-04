@@ -2157,13 +2157,24 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
     // copy batch to local memory in order to minimize
     // time in which cross-cpu data is accessed
     auto t1 = std::chrono::steady_clock::now();
+    static thread_local std::chrono::steady_clock::time_point last_req_queue_rx_poll;
     work_item* items[queue_length + PrefetchCnt];
     work_item* wi;
-    if (!q.pop(wi))
+    if (!q.pop(wi)) {
+        last_req_queue_rx_poll = t1;
+        auto t2 = std::chrono::steady_clock::now();
+
+        if (t2 - t1 > 10ms) {
+            dprint("process_queue took %d ms for no items\n", std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count());
+        }
+
         return 0;
+    }
     // start prefecthing first item before popping the rest to overlap memory
     // access with potential cache miss the second pop may cause
     wi->_t_popped_1 = std::chrono::steady_clock::now();
+    wi->_t_last_req_queue_rx_poll = last_req_queue_rx_poll;
+    last_req_queue_rx_poll = t1;
     prefetch<2>(wi);
     auto nr = q.pop(items);
     for (auto x : boost::make_iterator_range(items, items + nr)) {
@@ -2199,11 +2210,14 @@ size_t smp_message_queue::process_completions() {
 }
 
 void smp_message_queue::work_item::report() {
-    auto record = [] (std::chrono::steady_clock::time_point t1, std::chrono::steady_clock::time_point t2, std::chrono::microseconds& max, const char* label, bool special = false) {
+    auto record = [this] (std::chrono::steady_clock::time_point t1, std::chrono::steady_clock::time_point t2, std::chrono::microseconds& max, const char* label, bool special = false) {
+        auto usec = [] (auto dur) { return std::chrono::duration_cast<std::chrono::microseconds>(dur).count(); };
         auto diff = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1);
-        if (diff > std::chrono::microseconds(10000) && engine().cpu_id() != 0) {
+        if (diff > std::chrono::microseconds(10000)) {
             max = diff;
             dprint("saw %d as %d usec special %d\n", label, diff.count(), special);
+            dprint("times since last_req_queue_rx_poll: first %d second %d\n",
+                   usec(t1 - _t_last_req_queue_rx_poll), usec(t2 - _t_last_req_queue_rx_poll));
         }
     };
     static thread_local std::chrono::microseconds tx_pending, tx, pre_process, processed, rx_pending, rx;

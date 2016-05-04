@@ -374,6 +374,7 @@ class smp_message_queue {
         std::chrono::steady_clock::time_point _t_pushed_2;
         std::chrono::steady_clock::time_point _t_popped_2;
         std::chrono::steady_clock::time_point _t_completed;
+        std::chrono::steady_clock::time_point _t_last_req_queue_rx_poll;
         virtual ~work_item() { report(); }
         void report();
         virtual future<> process() = 0;
