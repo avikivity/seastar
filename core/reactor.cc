@@ -2137,7 +2137,7 @@ void smp_message_queue::flush_response_batch() {
         auto begin = _completed_fifo.cbegin();
         auto end = _completed_fifo.cend();
         for (auto x : boost::make_iterator_range(begin, end)) {
-            x->_t_pushed_2 = tsc_clock::now();
+            x->_t_pushed_2 = x->_t_pushed_2_after = tsc_clock::now();
         }
         auto tx_visited = tsc_clock::now();
         if (tx_visited - _completed._tx_visited > 4ms) {
@@ -2147,6 +2147,10 @@ void smp_message_queue::flush_response_batch() {
         end = _completed.push(begin, end);
         if (begin == end) {
             return;
+        }
+        auto now = tsc_clock::now();
+        for (auto x : boost::make_iterator_range(begin, end)) {
+            x->_t_pushed_2_after = now;
         }
         _completed.maybe_wakeup();
         _completed_fifo.erase(begin, end);
@@ -2172,8 +2176,8 @@ smp_message_queue::lf_queue::maybe_wakeup() {
 }
 #endif
 
-template<size_t PrefetchCnt, typename Func>
-size_t smp_message_queue::process_queue(lf_queue& q, Func process, bool interesting) {
+template<size_t PrefetchCnt, typename Func, typename Traits>
+size_t smp_message_queue::process_queue(lf_queue& q, Func process, Traits traits) {
     auto usec = [] (auto dur) {
         return std::chrono::duration_cast<std::chrono::microseconds>(dur).count();
     };
@@ -2182,7 +2186,7 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process, bool interest
     // time in which cross-cpu data is accessed
     auto t1 = tsc_clock::now();
     auto rx_visited = t1;
-    if (rx_visited - q._rx_visited > 4ms && interesting) {
+    if (rx_visited - q._rx_visited > 4ms && traits.interesting) {
         dprint("did not rx visit queue for at least 4ms\n");
     }
     q._rx_visited = rx_visited;
@@ -2202,16 +2206,16 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process, bool interest
     }
     // start prefecthing first item before popping the rest to overlap memory
     // access with potential cache miss the second pop may cause
-    wi->_t_popped_1 = tsc_clock::now();
-    if (wi->_t_popped_1 - wi->_t_pushed_1_after > 10ms && interesting) {
-        dprint("pushed->popped %d usec; last empty rx -> popped %d usec\n", usec(wi->_t_popped_1 - wi->_t_pushed_1_after), usec(wi->_t_popped_1 - q._rx_visited_but_empty));
+    wi->*(traits.t_popped) = tsc_clock::now();
+    if (wi->*(traits.t_popped) - wi->*(traits.t_pushed_after) > 10ms && traits.interesting) {
+        dprint("pushed->popped %d usec; last empty rx -> popped %d usec\n", usec(wi->*(traits.t_popped) - wi->*(traits.t_pushed_after)), usec(wi->*(traits.t_popped) - q._rx_visited_but_empty));
     }
-    wi->_t_last_req_queue_rx_poll = last_req_queue_rx_poll;
+    wi->*(traits.t_last_rx_poll) = last_req_queue_rx_poll;
     last_req_queue_rx_poll = t1;
     //prefetch<2>(wi);
     auto nr = q.pop(items);
     for (auto x : boost::make_iterator_range(items, items + nr)) {
-        x->_t_popped_1 = tsc_clock::now();
+        x->*(traits.t_popped) = tsc_clock::now();
     }
     std::fill(std::begin(items) + nr, std::begin(items) + nr + PrefetchCnt, nr ? items[nr - 1] : wi);
     unsigned i = 0;
@@ -2230,11 +2234,16 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process, bool interest
 }
 
 size_t smp_message_queue::process_completions() {
+    struct traits {
+        bool interesting = false;
+        tsc_clock::time_point work_item::*t_popped = &work_item::_t_popped_2;
+        tsc_clock::time_point work_item::*t_pushed_after = &work_item::_t_pushed_2_after;
+        tsc_clock::time_point work_item::*t_last_rx_poll = &work_item::_t_last_resp_queue_rx_poll;
+    };
     auto nr = process_queue<prefetch_cnt*2>(_completed, [] (work_item* wi) {
-        wi->_t_popped_2 = tsc_clock::now();
         wi->complete();
         delete wi;
-    });
+    }, traits());
     _current_queue_length -= nr;
     _compl += nr;
     _last_cmpl_batch = nr;
@@ -2272,11 +2281,17 @@ void smp_message_queue::flush_request_batch() {
 }
 
 size_t smp_message_queue::process_incoming() {
+    struct traits {
+        bool interesting = true;
+        tsc_clock::time_point work_item::*t_popped = &work_item::_t_popped_1;
+        tsc_clock::time_point work_item::*t_pushed_after = &work_item::_t_pushed_1_after;
+        tsc_clock::time_point work_item::*t_last_rx_poll = &work_item::_t_last_req_queue_rx_poll;
+    };
     auto nr = process_queue<prefetch_cnt>(_pending, [this] (work_item* wi) {
         wi->process().then([this, wi] {
             respond(wi);
         });
-    }, true);
+    }, traits());
     _received += nr;
     _last_rcv_batch = nr;
     return nr;

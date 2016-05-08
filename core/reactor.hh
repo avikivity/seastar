@@ -397,9 +397,11 @@ class smp_message_queue {
         tsc_clock::time_point _t_process_starts;
         tsc_clock::time_point _t_process_ends;
         tsc_clock::time_point _t_pushed_2;
+        tsc_clock::time_point _t_pushed_2_after;
         tsc_clock::time_point _t_popped_2;
         tsc_clock::time_point _t_completed;
         tsc_clock::time_point _t_last_req_queue_rx_poll;
+        tsc_clock::time_point _t_last_resp_queue_rx_poll;
         virtual ~work_item() { report(); }
         void report();
         virtual future<> process() = 0;
@@ -461,8 +463,8 @@ public:
         return fut;
     }
     void start(unsigned cpuid);
-    template<size_t PrefetchCnt, typename Func>
-    size_t process_queue(lf_queue& q, Func process, bool interesting = false);
+    template<size_t PrefetchCnt, typename Func, typename Traits>
+    size_t process_queue(lf_queue& q, Func process, Traits traits);
     size_t process_incoming();
     size_t process_completions();
 private:
