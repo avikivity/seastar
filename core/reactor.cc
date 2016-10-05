@@ -76,6 +76,7 @@
 #endif
 
 #include <sys/mman.h>
+#include <sys/utsname.h>
 #include <linux/falloc.h>
 #include <linux/magic.h>
 #include "util/backtrace.hh"
@@ -1188,6 +1189,51 @@ append_challenged_posix_file_impl::close() noexcept {
     });
 }
 
+// Some kernels can append to xfs filesystems, some cannot; determine
+// from kernel version.
+static
+unsigned
+xfs_concurrency_from_kernel_version() {
+    auto num = [] (std::csub_match x) {
+        auto b = x.first;
+        auto e = x.second;
+        if (*b == '.') {
+            ++b;
+        }
+        return std::stoi(std::string(b, e));
+    };
+    struct utsname buf;
+    auto r = ::uname(&buf);
+    throw_system_error_on(r == -1);
+    // 2-4 dotted decimal numbers, optional "-anything"
+    auto generic_re = std::regex(R"XX((\d+)(\.\d+)(\.\d+)?(\.\d+)?(-.*)?)XX");
+    std::cmatch m1;
+    // try to see if this is a mainline kernel with xfs append fixed (3.15+)
+    if (std::regex_match(buf.release, m1, generic_re)) {
+        auto maj = num(m1[1]);
+        auto min = num(m1[2]);
+        print("kernel: %d.%d\n", maj, min);
+        if (maj > 3 || (maj == 3 && min >= 15)) {
+            // Can append, but not concurrently
+            return 1;
+        }
+    }
+    // 3.10.0-num1.num2?.num3?.el7.anything
+    auto rhel_re = std::regex(R"XX(3\.10\.0-(\d+)(\.\d+)?(\.\d+)?\.el7.*)XX");
+    std::cmatch m2;
+    // try to see if this is a RHEL kernel with the backported fix (3.10.0-325.el7+)
+    if (std::regex_match(buf.release, m2, rhel_re)) {
+        auto rmaj = num(m2[1]);
+        print("rhel kernel: %d\n", rmaj);
+        if (rmaj >= 325) {
+            // Can append, but not concurrently
+            return 1;
+        }
+    }
+    // Cannot append at all; need ftrucnate().
+    return 0;
+}
+
 inline
 shared_ptr<file_impl>
 make_file_impl(int fd, file_open_options options) {
@@ -1220,7 +1266,7 @@ make_file_impl(int fd, file_open_options options) {
             switch (sfs.f_type) {
             case 0x58465342: /* XFS */
                 as.append_challenged = true;
-                as.append_concurrency = 1;
+                as.append_concurrency = xfs_concurrency_from_kernel_version();
                 break;
             case 0x6969: /* NFS */
                 as.append_challenged = false;
