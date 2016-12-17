@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include "function_traits.hh"
 #include "../util/gcc6-concepts.hh"
+#include "scheduling.hh"
 
 namespace seastar {
 
@@ -730,6 +731,17 @@ private:
             _promise = nullptr;
         }
     }
+    template <typename Func>
+    void schedule(seastar::scheduled_function<Func>&& func) {
+        if (state()->available()) {
+            ::seastar::schedule(func.get_scheduling_group(), std::make_unique<continuation<Func, T...>>(std::move(func).unwrap(), std::move(*state())));
+        } else {
+            assert(_promise);
+            _promise->schedule(std::move(func));
+            _promise->_future = nullptr;
+            _promise = nullptr;
+        }
+    }
 
     [[gnu::always_inline]]
     future_state<T...> get_available_state() noexcept {
@@ -893,13 +905,13 @@ public:
         typename futurator::promise_type pr;
         auto fut = pr.get_future();
         try {
-            schedule([pr = std::move(pr), func = std::forward<Func>(func)] (auto&& state) mutable {
+            schedule(seastar::impl::rebind_scheduled_function(std::forward<Func>(func), [pr = std::move(pr)] (Func&& func, auto&& state) mutable {
                 if (state.failed()) {
                     pr.set_exception(std::move(state).get_exception());
                 } else {
                     futurator::apply(std::forward<Func>(func), std::move(state).get_value()).forward_to(std::move(pr));
                 }
-            });
+            }));
         } catch (...) {
             // catch possible std::bad_alloc in schedule() above
             // nothing can be done about it, we cannot break future chain by returning
@@ -936,9 +948,9 @@ public:
         typename futurator::promise_type pr;
         auto fut = pr.get_future();
         try {
-            schedule([pr = std::move(pr), func = std::forward<Func>(func)] (auto&& state) mutable {
+            schedule(seastar::impl::rebind_scheduled_function(std::forward<Func>(func), [pr = std::move(pr)] (Func&& func, auto&& state) mutable {
                 futurator::apply(std::forward<Func>(func), future(std::move(state))).forward_to(std::move(pr));
-            });
+            }));
         } catch (...) {
             // catch possible std::bad_alloc in schedule() above
             // nothing can be done about it, we cannot break future chain by returning
