@@ -243,7 +243,7 @@ thread_local thread_context::all_thread_list thread_context::_all_threads;
 void
 thread_context::yield() {
     if (!_attr.scheduling_group) {
-        ::schedule(_attr.sched_group, make_task([this] {
+        schedule(_attr.sched_group, make_task([this] {
             switch_in();
         }));
         switch_out();
