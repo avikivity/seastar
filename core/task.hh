@@ -23,6 +23,12 @@
 
 #include <memory>
 
+namespace seastar {
+
+class scheduling_group;
+
+}
+
 class task {
 public:
     virtual ~task() noexcept {}
@@ -30,6 +36,7 @@ public:
 };
 
 void schedule(std::unique_ptr<task> t);
+void schedule(seastar::scheduling_group sg, std::unique_ptr<task> t);
 void schedule_urgent(std::unique_ptr<task> t);
 
 template <typename Func>

@@ -105,6 +105,12 @@ std::atomic<manual_clock::rep> manual_clock::_now;
 constexpr std::chrono::milliseconds lowres_clock::_granularity;
 
 
+template <typename... Args>
+void
+sched_print(const char* fmt, Args&&... args) {
+    //print(fmt, std::forward<Args>(args)...);
+}
+
 static constexpr unsigned sched_ticks_per_period() {
     return 8;
 }
@@ -261,6 +267,47 @@ static decltype(auto) install_signal_handler_stack() {
     });
 }
 
+reactor::task_queue::task_queue(sstring name, unsigned shares)
+        : _shares(shares)
+        , _reciprocal_shares_times_2_power_32((uint64_t(1) << 32) / shares)
+        , _name(name) {
+    namespace sm = seastar::metrics;
+    _metrics.add_group("scheduler", {
+        sm::make_counter(name + "_runtime_ms", [this] {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(_runtime).count();
+        }, sm::description("Accumulated runtime of this task queue; an increment rate of 1000ms per second indicates full utilization")),
+        sm::make_counter(name + "_tasks_processed", _tasks_processed,
+                sm::description("Count of tasks executing on this queue; indicates together with runtime_ms indicates length of tasks")),
+        sm::make_gauge(name + "_queue_length", [this] { return _q.size(); },
+                sm::description("Size of backlog on this queue, in tasks; indicates whether the queue is busy and/or contended")),
+    });
+}
+
+inline
+uint64_t
+reactor::task_queue::to_vruntime(steady_clock_type::duration runtime) const {
+    auto scaled = (runtime.count() * _reciprocal_shares_times_2_power_32) >> 32;
+    // Prevent overflow from returning ridiculous values
+    return std::max<int64_t>(scaled, 0);
+}
+
+void
+reactor::account_runtime(task_queue& tq, steady_clock_type::duration runtime) {
+    tq._vruntime += tq.to_vruntime(runtime);
+    tq._runtime += runtime;
+}
+
+void
+reactor::account_idle(steady_clock_type::duration runtime) {
+    // anything to do here?
+}
+
+struct reactor::task_queue::indirect_compare {
+    bool operator()(const task_queue* tq1, const task_queue* tq2) const {
+        return tq1->_vruntime > tq2->_vruntime;
+    }
+};
+
 reactor::reactor()
     : _backend()
 #ifdef HAVE_OSV
@@ -272,9 +319,11 @@ reactor::reactor()
     , _cpu_started(0)
     , _io_context(0)
     , _io_context_available(max_aio)
+    , _at_destroy_tasks("atexit", 100)
     , _reuseport(posix_reuseport_detect())
     , _task_quota_timer_thread(&reactor::task_quota_timer_thread_fn, this) {
-
+    _task_queues.push_back(std::make_unique<task_queue>("main", 100));
+    _current_task_queue = nullptr;
     seastar::thread_impl::init();
     auto r = ::io_setup(max_aio, &_io_context);
     assert(r >= 0);
@@ -434,7 +483,8 @@ void reactor::configure(boost::program_options::variables_map vm) {
     });
 
     _handle_sigint = !vm.count("no-handle-interrupt");
-    _task_quota = vm["task-quota-ms"].as<double>() * 1ms;
+    auto task_quota = vm["task-quota-ms"].as<double>() * 1ms;
+    _task_quota = std::chrono::duration_cast<steady_clock_type::duration>(task_quota);
     _max_task_backlog = vm["max-task-backlog"].as<unsigned>();
     _max_poll_time = vm["idle-poll-time-us"].as<unsigned>() * 1us;
     if (vm.count("poll-mode")) {
@@ -1938,14 +1988,32 @@ void reactor::exit(int ret) {
     smp::submit_to(0, [this, ret] { _return = ret; stop(); });
 }
 
+uint64_t
+reactor::pending_task_count() const {
+    uint64_t ret = 0;
+    for (auto&& tq : _task_queues) {
+        ret += tq->_q.size();
+    }
+    return ret;
+}
+
+uint64_t
+reactor::tasks_processed() const {
+    uint64_t ret = 0;
+    for (auto&& tq : _task_queues) {
+        ret += tq->_tasks_processed;
+    }
+    return ret;
+}
+
 void reactor::register_metrics() {
 
     namespace sm = seastar::metrics;
 
     _metric_groups.add_group("reactor", {
-            sm::make_gauge("tasks_pending", sm::description("Number of pending tasks in the queue"), std::bind(&decltype(_pending_tasks)::size, &_pending_tasks)),
+            sm::make_gauge("tasks_pending", sm::description("Number of pending tasks in the queue"), std::bind(&reactor::pending_task_count, this), ),
             // total_operations value:DERIVE:0:U
-            sm::make_derive("tasks_processed", _tasks_processed, sm::description("Total tasks processed")),
+            sm::make_derive("tasks_processed", std::bind(&reactor::tasks_processed, this), sm::description("Total tasks processed")),
             sm::make_derive("polls", _polls, sm::description("Number of times pollers were executed")),
             sm::make_derive("timers_pending", std::bind(&decltype(_timers)::size, &_timers), sm::description("Number of tasks in the timer-pending queue")),
             sm::make_gauge("utilization", [this] { return _load * 100; }, sm::description("CPU utilization")),
@@ -2019,9 +2087,8 @@ void reactor::register_metrics() {
     });
 }
 
-void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks) {
-    STAP_PROBE(seastar, reactor_run_tasks_start);
-    g_need_preempt().store(sched_ticks_per_period(), std::memory_order_relaxed);
+void reactor::run_tasks(task_queue& tq) {
+    auto& tasks = tq._q;
     while (!tasks.empty()) {
         auto tsk = std::move(tasks.front());
         tasks.pop_front();
@@ -2029,13 +2096,12 @@ void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks) {
         tsk->run();
         tsk.reset();
         STAP_PROBE(seastar, reactor_run_tasks_single_end);
-        ++_tasks_processed;
+        ++tq._tasks_processed;
         // check at end of loop, to allow at least one task to run
         if (need_preempt() && tasks.size() <= _max_task_backlog) {
             break;
         }
     }
-    STAP_PROBE(seastar, reactor_run_tasks_end);
 }
 
 void reactor::force_poll() {
@@ -2378,6 +2444,110 @@ static void print_backtrace_safe() noexcept {
     });
 }
 
+inline
+bool
+reactor::have_more_tasks() const {
+    return _nr_active_task_queues != 0;
+}
+
+void
+reactor::run_some_tasks(steady_clock_type::time_point& t_run_completed) {
+    if (!have_more_tasks()) {
+        return;
+    }
+    int ticks_remaining_this_period = sched_ticks_per_period();
+    auto plan_end = plan_run(ticks_remaining_this_period);
+    auto tqp = _active_task_queues.data();
+    STAP_PROBE(seastar, reactor_run_tasks_start);
+    do {
+        auto t_run_started = t_run_completed;
+        auto tq = *tqp;
+        auto planned_ticks = tq->_planned_ticks;
+        sched_print("running tq %p %s for %d ticks\n", (void*)tq, tq->_name, planned_ticks);
+        g_need_preempt().store(planned_ticks, std::memory_order_relaxed);
+        _current_task_queue = tq;
+        run_tasks(*tq);
+        _current_task_queue = nullptr;
+        t_run_completed = std::chrono::steady_clock::now();
+        account_runtime(*tq, t_run_completed - t_run_started);
+        _last_vruntime = tq->_vruntime;
+        auto ticks_consumed = planned_ticks - g_need_preempt().load(std::memory_order_relaxed);
+        sched_print("run complete (%p %s); ticks consumed %d; empty %d\n", (void*)tq, tq->_name, ticks_consumed, tq->_q.empty());
+        ticks_remaining_this_period -= ticks_consumed;
+        if (tq->_q.empty()) {
+            // Move a planned tq here
+            *tqp = *--plan_end;
+            // And move an unplanned tq here
+            *plan_end = _active_task_queues[--_nr_active_task_queues];
+            if (ticks_remaining_this_period > 0 && have_more_tasks()) {
+                tqp = _active_task_queues.data();
+                plan_end = plan_run(ticks_remaining_this_period);
+            }
+        } else {
+            ++tqp;
+        }
+    } while (ticks_remaining_this_period > 0 && have_more_tasks());
+    STAP_PROBE(seastar, reactor_run_tasks_end);
+}
+
+reactor::task_queue**
+reactor::plan_run(unsigned tick_budget) {
+    // Simulate a scheduling period, assuming all task queues are preempted
+    // (instead of exhausting all work), and that no new task queues are awakened.
+    // This allows us to optimize for the cpu-bound steady state.  If the assumptions
+    // are not held we will re-plan our run.
+
+    sched_print("planning a run, ticks %d active queues %d\n", tick_budget, _nr_active_task_queues);
+
+    // We will run at most tick_budget task queues, no need to sort more
+    std::partial_sort(_active_task_queues.data(),
+            _active_task_queues.data() + std::min(tick_budget, _nr_active_task_queues),
+            _active_task_queues.data() + _nr_active_task_queues,
+            task_queue::indirect_compare());
+
+    auto plan_start = _active_task_queues.data();
+    auto plan_end = plan_start;
+    auto tq_end = plan_start + _nr_active_task_queues;
+
+    while (tick_budget--) {
+        auto smallest = plan_start != plan_end ? *plan_start : nullptr;
+        if (!smallest || (plan_end < tq_end && (*plan_end)->_vruntime < smallest->_vruntime_plan_end)) {
+            smallest = *plan_end++;
+            sched_print("picking new smallest: name %s vruntime %d\n", smallest->_name, smallest->_vruntime);
+            smallest->_vruntime_plan_end = smallest->_vruntime;
+            smallest->_planned_ticks = 0;
+            // Move smallest to front
+            std::copy_backward(plan_start, plan_end - 1, plan_end);
+            *plan_start = smallest;
+        }
+        smallest->_planned_ticks += 1;
+        smallest->_vruntime_plan_end += smallest->to_vruntime(_task_quota / sched_ticks_per_period());
+        _vruntime_plan_end = smallest->_vruntime_plan_end;
+        sched_print("adjusting %s: planned %d vruntime_end %d\n", smallest->_name, smallest->_planned_ticks, smallest->_vruntime_plan_end);
+        // Re-sort the plan
+        auto newpos = std::find_if(plan_start + 1, plan_end, [&] (task_queue* pos) { return smallest->_vruntime_plan_end <= pos->_vruntime_plan_end; });
+        if (newpos != plan_start) {
+            auto n = std::copy(plan_start + 1, newpos, plan_start);
+            *n = smallest;
+        }
+    }
+    for (auto tq : boost::make_iterator_range(plan_start, plan_end)) {
+        sched_print("tq %p %s ticks %d shares %d vr %d vr_end %d\n", (void*)tq, tq->_name, tq->_planned_ticks, tq->_shares, tq->_vruntime, tq->_vruntime_plan_end);
+    }
+    return plan_end;
+}
+
+void
+reactor::reschedule(task_queue& tq) {
+    sched_print("rescheduling %p %s\n", (void*)&tq, tq._name);
+    _active_task_queues[_nr_active_task_queues++] = &tq;
+    // Don't allow a sleeper to gain an advantage
+    tq._vruntime = std::max(_last_vruntime, tq._vruntime);
+    if (tq._vruntime  + tq.to_vruntime(_task_quota / sched_ticks_per_period() )< _vruntime_plan_end) {
+        g_need_preempt().store(0, std::memory_order_relaxed);
+    }
+}
+
 int reactor::run() {
     auto signal_stack = install_signal_handler_stack();
 
@@ -2463,20 +2633,21 @@ int reactor::run() {
     bool idle = false;
 
     std::function<bool()> check_for_work = [this] () {
-        return poll_once() || !_pending_tasks.empty() || seastar::thread::try_run_one_yielded_thread();
+        return poll_once() || have_more_tasks() || seastar::thread::try_run_one_yielded_thread();
     };
     std::function<bool()> pure_check_for_work = [this] () {
-        return pure_poll_once() || !_pending_tasks.empty() || seastar::thread::try_run_one_yielded_thread();
+        return pure_poll_once() || have_more_tasks() || seastar::thread::try_run_one_yielded_thread();
     };
+    auto t_run_completed = idle_end;
     while (true) {
-        run_tasks(_pending_tasks);
+        run_some_tasks(t_run_completed);
         if (_stopped) {
             load_timer.cancel();
             // Final tasks may include sending the last response to cpu 0, so run them
-            while (!_pending_tasks.empty()) {
-                run_tasks(_pending_tasks);
+            while (have_more_tasks()) {
+                run_some_tasks(t_run_completed);
             }
-            while (!_at_destroy_tasks.empty()) {
+            while (!_at_destroy_tasks._q.empty()) {
                 run_tasks(_at_destroy_tasks);
             }
             smp::arrive_at_event_loop_end();
@@ -2489,8 +2660,10 @@ int reactor::run() {
         ++_polls;
 
         if (check_for_work()) {
+            idle_end = t_run_completed;
             if (idle) {
                 _total_idle += idle_end - idle_start;
+                account_idle(idle_end - idle_start);
                 idle_start = idle_end;
                 idle = false;
             }
@@ -2527,6 +2700,7 @@ int reactor::run() {
                 check_for_work();
             }
         }
+        t_run_completed = idle_end;
     }
     // To prevent ordering issues from rising, destroy the I/O queue explicitly at this point.
     // This is needed because the reactor is destroyed from the thread_local destructors. If
@@ -2963,6 +3137,10 @@ void schedule(std::unique_ptr<task> t) {
 
 void schedule_urgent(std::unique_ptr<task> t) {
     engine().add_urgent_task(std::move(t));
+}
+
+void schedule(scheduling_group sg, std::unique_ptr<task> t) {
+    engine().add_task(sg, std::move(t));
 }
 
 bool operator==(const ::sockaddr_in a, const ::sockaddr_in b) {
@@ -3796,7 +3974,7 @@ future<connected_socket> connect(socket_address sa, socket_address local, transp
 }
 
 void reactor::add_high_priority_task(std::unique_ptr<task>&& t) {
-    _pending_tasks.push_front(std::move(t));
+    add_urgent_task(std::move(t));
     // break .then() chains
     g_need_preempt().store(0, std::memory_order_relaxed);
 }
@@ -3867,4 +4045,37 @@ steady_clock_type::duration reactor::total_idle_time() {
 
 steady_clock_type::duration reactor::total_busy_time() {
     return steady_clock_type::now() - _start_time - _total_idle;
+}
+
+void
+reactor::init_scheduling_group(seastar::scheduling_group sg, sstring name, unsigned shares) {
+    _task_queues.resize(std::max<size_t>(_task_queues.size(), sg._id + 1));
+    _task_queues[sg._id] = std::make_unique<task_queue>(name, shares);
+}
+
+namespace seastar {
+
+bool
+scheduling_group::active() const {
+    auto& r = engine();
+    return r._current_task_queue == r._task_queues[_id].get();
+}
+
+const sstring&
+scheduling_group::name() const {
+    return engine()._task_queues[_id]->_name;
+}
+
+future<scheduling_group>
+create_scheduling_group(sstring name, unsigned shares) {
+    static std::atomic<unsigned> last{1}; // 0 is auto-created
+    auto id = last.fetch_add(1);
+    auto sg = scheduling_group(id);
+    return smp::invoke_on_all([sg, name, shares] {
+        engine().init_scheduling_group(sg, name, shares);
+    }).then([sg] {
+        return make_ready_future<scheduling_group>(sg);
+    });
+}
+
 }
