@@ -74,6 +74,7 @@
 #include "lowres_clock.hh"
 #include "manual_clock.hh"
 #include "core/metrics_registration.hh"
+#include "scheduling.hh"
 
 #ifdef HAVE_OSV
 #include <osv/sched.hh>
@@ -718,9 +719,29 @@ private:
     io_stats _io_stats;
     uint64_t _fsyncs = 0;
     uint64_t _cxx_exceptions = 0;
-    circular_buffer<std::unique_ptr<task>> _pending_tasks;
-    circular_buffer<std::unique_ptr<task>> _at_destroy_tasks;
-    std::chrono::duration<double> _task_quota;
+    struct task_queue {
+        explicit task_queue(sstring name, unsigned shares);
+        uint64_t _vruntime = 0;
+        uint64_t _vruntime_plan_end = 0;
+        unsigned _shares;
+        unsigned _reciprocal_shares_times_2_power_32;
+        unsigned _planned_ticks = 0;
+        steady_clock_type::duration _runtime = {};
+        uint64_t _tasks_processed = 0;
+        circular_buffer<std::unique_ptr<task>> _q;
+        sstring _name;
+        uint64_t to_vruntime(steady_clock_type::duration runtime) const;
+        struct indirect_compare;
+        seastar::metrics::metric_groups _metrics;
+    };
+    std::vector<std::unique_ptr<task_queue>> _task_queues;
+    task_queue* _current_task_queue;
+    uint64_t _last_vruntime = 0;
+    uint64_t _vruntime_plan_end = 0;
+    std::array<task_queue*, 128> _active_task_queues;
+    unsigned _nr_active_task_queues = 0;
+    task_queue _at_destroy_tasks;
+    steady_clock_type::duration _task_quota;
     /// Handler that will be called when there is no task to execute on cpu.
     /// It represents a low priority work.
     /// 
@@ -799,9 +820,21 @@ private:
     thread_pool _thread_pool;
     friend class thread_pool;
 
-    void run_tasks(circular_buffer<std::unique_ptr<task>>& tasks);
+    uint64_t pending_task_count() const;
+    void run_tasks(task_queue& tq);
+    bool have_more_tasks() const;
     bool posix_reuseport_detect();
     void task_quota_timer_thread_fn();
+    void run_some_tasks(steady_clock_type::time_point& t_run_completed);
+    void reschedule(task_queue& tq);
+    void adjust_scheduler_decay_factor(steady_clock_type::duration runtime);
+    void renormalize_scheduler_decay_factor();
+    void account_runtime(task_queue& tq, steady_clock_type::duration runtime);
+    void account_idle(steady_clock_type::duration idletime);
+    void init_scheduling_group(scheduling_group sg, sstring name, unsigned shares);
+    uint64_t tasks_processed() const;
+    uint64_t min_vruntime() const;
+    task_queue** plan_run(unsigned tick_budget);
 public:
     static boost::program_options::options_description get_options_description(std::chrono::duration<double> default_task_quota);
     explicit reactor(unsigned id);
@@ -876,11 +909,27 @@ public:
 
     template <typename Func>
     void at_destroy(Func&& func) {
-        _at_destroy_tasks.push_back(make_task(std::forward<Func>(func)));
+        _at_destroy_tasks._q.push_back(make_task(std::forward<Func>(func)));
     }
 
-    void add_task(std::unique_ptr<task>&& t) { _pending_tasks.push_back(std::move(t)); }
-    void add_urgent_task(std::unique_ptr<task>&& t) { _pending_tasks.push_front(std::move(t)); }
+    void add_task(std::unique_ptr<task>&& t) { return add_task(scheduling_group(), std::move(t)); }
+    void add_urgent_task(std::unique_ptr<task>&& t) { return add_urgent_task(scheduling_group(), std::move(t)); }
+    void add_task(scheduling_group sg, std::unique_ptr<task>&& t) {
+        auto* q = _task_queues[sg._id].get();
+        bool was_empty = q->_q.empty();
+        q->_q.push_back(std::move(t));
+        if (was_empty && q != _current_task_queue) {
+            reschedule(*q);
+        }
+    }
+    void add_urgent_task(scheduling_group sg, std::unique_ptr<task>&& t) {
+        auto* q = _task_queues[sg._id].get();
+        bool was_empty = q->_q.empty();
+        q->_q.push_front(std::move(t));
+        if (was_empty && q != _current_task_queue) {
+            reschedule(*q);
+        }
+    }
 
     /// Set a handler that will be called when there is no task to execute on cpu.
     /// Handler should do a low priority work.
@@ -951,9 +1000,11 @@ private:
     friend class smp;
     friend class smp_message_queue;
     friend class poller;
+    friend class scheduling_group;
     friend void add_to_flush_poller(output_stream<char>* os);
     friend int ::_Unwind_RaiseException(void *h);
     metrics::metric_groups _metric_groups;
+    friend future<scheduling_group> create_scheduling_group(sstring name, unsigned shares);
 public:
     bool wait_and_process(int timeout = 0, const sigset_t* active_sigmask = nullptr) {
         return _backend.wait_and_process(timeout, active_sigmask);
