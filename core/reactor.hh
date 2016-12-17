@@ -640,6 +640,7 @@ public:
     };
     using work_waiting_on_reactor = const std::function<bool()>&;
     using idle_cpu_handler = std::function<idle_cpu_handler_result(work_waiting_on_reactor)>;
+    using scheduling_group = seastar::scheduling_group;
 
 private:
     // FIXME: make _backend a unique_ptr<reactor_backend>, not a compile-time #ifdef.
@@ -704,7 +705,21 @@ private:
     uint64_t _fstream_read_bytes_blocked = 0;
     uint64_t _fstream_read_aheads_discarded = 0;
     uint64_t _fstream_read_ahead_discarded_bytes = 0;
-    circular_buffer<std::unique_ptr<task>> _pending_tasks;
+    struct task_queue {
+        explicit task_queue(unsigned shares = 100)
+            : _reciprocal_shares(1.0f / shares) {
+        }
+        float _vruntime = 0;
+        float _reciprocal_shares = 0.01;
+        circular_buffer<std::unique_ptr<task>> _q;
+        struct indirect_compare {
+            bool operator()(const task_queue* tq1, const task_queue* tq2) const;
+        };
+    };
+    std::vector<std::unique_ptr<task_queue>> _pending_tasks;
+    task_queue* _current_task_queue;
+    // FIXME: replace with a better structure
+    std::priority_queue<task_queue*, std::vector<task_queue*>, task_queue::indirect_compare> _task_queue_by_vruntime;
     circular_buffer<std::unique_ptr<task>> _at_destroy_tasks;
     std::chrono::duration<double> _task_quota;
     /// Handler that will be called when there is no task to execute on cpu.
@@ -728,6 +743,8 @@ private:
     steady_clock_type::duration _total_idle;
     steady_clock_type::time_point _start_time = steady_clock_type::now();
     std::chrono::nanoseconds _max_poll_time = calculate_poll_time();
+    float _scheduler_decay_factor = 1.0f;
+    float _scheduler_k;
     circular_buffer<output_stream<char>* > _flush_batching;
     std::atomic<bool> _sleeping alignas(64);
     pthread_t _thread_id alignas(64) = pthread_self();
@@ -783,7 +800,15 @@ private:
     friend class thread_pool;
 
     void run_tasks(circular_buffer<std::unique_ptr<task>>& tasks);
+    bool have_more_tasks() const;
     bool posix_reuseport_detect();
+    void run_some_tasks(steady_clock_type::time_point& t_run_completed);
+    void reschedule(task_queue& tq);
+    void adjust_scheduler_decay_factor(steady_clock_type::duration runtime);
+    void renormalize_scheduler_decay_factor();
+    void account_runtime(task_queue& tq, steady_clock_type::duration runtime);
+    void account_idle(steady_clock_type::duration idletime);
+    void init_scheduling_group(seastar::scheduling_group sg, unsigned shares);
 public:
     static boost::program_options::options_description get_options_description();
     reactor();
@@ -861,8 +886,24 @@ public:
         _at_destroy_tasks.push_back(make_task(std::forward<Func>(func)));
     }
 
-    void add_task(std::unique_ptr<task>&& t) { _pending_tasks.push_back(std::move(t)); }
-    void add_urgent_task(std::unique_ptr<task>&& t) { _pending_tasks.push_front(std::move(t)); }
+    void add_task(std::unique_ptr<task>&& t) { return add_task(scheduling_group(), std::move(t)); }
+    void add_urgent_task(std::unique_ptr<task>&& t) { return add_urgent_task(scheduling_group(), std::move(t)); }
+    void add_task(scheduling_group sg, std::unique_ptr<task>&& t) {
+        auto* q = _pending_tasks[sg._id].get();
+        bool was_empty = q->_q.empty();
+        q->_q.push_back(std::move(t));
+        if (was_empty && q != _current_task_queue) {
+            reschedule(*q);
+        }
+    }
+    void add_urgent_task(scheduling_group sg, std::unique_ptr<task>&& t) {
+        auto* q = _pending_tasks[sg._id].get();
+        bool was_empty = q->_q.empty();
+        q->_q.push_front(std::move(t));
+        if (was_empty && q != _current_task_queue) {
+            reschedule(*q);
+        }
+    }
 
     /// Set a handler that will be called when there is no task to execute on cpu.
     /// Handler should do a low priority work.
@@ -932,10 +973,12 @@ private:
     friend class smp;
     friend class smp_message_queue;
     friend class poller;
+    friend class seastar::scheduling_group;
     friend void add_to_flush_poller(output_stream<char>* os);
     friend int _Unwind_RaiseException(void *h);
     std::vector<scollectd::registration> _collectd_regs;
     seastar::metrics::metric_groups _metric_groups;
+    friend future<scheduling_group> seastar::create_scheduling_group(unsigned shares);
 public:
     bool wait_and_process(int timeout = 0, const sigset_t* active_sigmask = nullptr) {
         return _backend.wait_and_process(timeout, active_sigmask);
