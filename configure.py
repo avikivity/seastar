@@ -225,6 +225,7 @@ apps = [
     'apps/fair_queue_tester/fair_queue_tester',
     'apps/memcached/memcached',
     'apps/iotune/iotune',
+    'tests/scheduling_group_demo',
     ]
 
 all_artifacts = apps + tests + ['libseastar.a', 'seastar.pc']
@@ -425,6 +426,7 @@ deps = {
     'tests/json_formatter_test': ['tests/json_formatter_test.cc'] + core + http,
     'tests/dns_test': ['tests/dns_test.cc'] + core + libnet,
     'tests/execution_stage_test': ['tests/execution_stage_test.cc'] + core,
+    'tests/scheduling_group_demo': ['tests/scheduling_group_demo.cc'] + core,
 }
 
 boost_tests = [
