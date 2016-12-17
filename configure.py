@@ -273,6 +273,7 @@ apps = [
     'apps/fair_queue_tester/fair_queue_tester',
     'apps/memcached/memcached',
     'apps/iotune/iotune',
+    'tests/scheduling_group_demo',
     ]
 
 all_artifacts = apps + tests + ['libseastar.a', 'seastar.pc']
@@ -486,6 +487,7 @@ deps = {
     'tests/program_options_test': ['tests/program_options_test.cc'] + core,
     'tests/tuple_utils_test': ['tests/tuple_utils_test.cc'],
     'tests/circular_buffer_fixed_capacity_test': ['tests/circular_buffer_fixed_capacity_test.cc'],
+    'tests/scheduling_group_demo': ['tests/scheduling_group_demo.cc'] + core,
 }
 
 boost_tests = [
