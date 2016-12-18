@@ -824,10 +824,10 @@ public:
     void wait() {
         auto thread = seastar::thread_impl::get();
         assert(thread);
-        schedule([this, thread] (future_state<T...>&& new_state) {
+        schedule(with_scheduling_group(seastar::thread_impl::sched_group(thread), [this, thread] (future_state<T...>&& new_state) {
             *state() = std::move(new_state);
             seastar::thread_impl::switch_in(thread);
-        });
+        }));
         seastar::thread_impl::switch_out(thread);
     }
     /// \endcond
