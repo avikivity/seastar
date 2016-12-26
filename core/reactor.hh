@@ -680,7 +680,6 @@ private:
     file_desc _task_quota_timer;
     promise<> _start_promise;
     semaphore _cpu_started;
-    uint64_t _tasks_processed = 0;
     unsigned _max_task_backlog = 1000;
     seastar::timer_set<timer<>, &timer<>::_link> _timers;
     seastar::timer_set<timer<>, &timer<>::_link>::timer_list_t _expired_timers;
@@ -704,22 +703,23 @@ private:
     uint64_t _fstream_read_aheads_discarded = 0;
     uint64_t _fstream_read_ahead_discarded_bytes = 0;
     struct task_queue {
-        explicit task_queue(sstring name, unsigned shares)
-            : _reciprocal_shares(1.0f / shares), _name(name) {
-        }
+        explicit task_queue(sstring name, unsigned shares);
         float _vruntime = 0;
         float _reciprocal_shares = 0.01;
+        steady_clock_type::duration _runtime = {};
+        uint64_t _tasks_processed;
         circular_buffer<std::unique_ptr<task>> _q;
         sstring _name;
         struct indirect_compare {
             bool operator()(const task_queue* tq1, const task_queue* tq2) const;
         };
+        seastar::metrics::metric_groups _metrics;
     };
     std::vector<std::unique_ptr<task_queue>> _task_queues;
     task_queue* _current_task_queue;
     // FIXME: replace with a better structure
     std::priority_queue<task_queue*, std::vector<task_queue*>, task_queue::indirect_compare> _task_queue_by_vruntime;
-    circular_buffer<std::unique_ptr<task>> _at_destroy_tasks;
+    task_queue _at_destroy_tasks;
     std::chrono::duration<double> _task_quota;
     /// Handler that will be called when there is no task to execute on cpu.
     /// It represents a low priority work.
@@ -802,7 +802,7 @@ private:
     friend class thread_pool;
 
     uint64_t pending_task_count() const;
-    void run_tasks(circular_buffer<std::unique_ptr<task>>& tasks);
+    void run_tasks(task_queue& tq);
     bool have_more_tasks() const;
     bool posix_reuseport_detect();
     void task_quota_timer_thread_fn();
@@ -813,6 +813,7 @@ private:
     void account_runtime(task_queue& tq, steady_clock_type::duration runtime);
     void account_idle(steady_clock_type::duration idletime);
     void init_scheduling_group(seastar::scheduling_group sg, sstring name, unsigned shares);
+    uint64_t tasks_processed() const;
 public:
     static boost::program_options::options_description get_options_description();
     reactor();
@@ -887,7 +888,7 @@ public:
 
     template <typename Func>
     void at_destroy(Func&& func) {
-        _at_destroy_tasks.push_back(make_task(std::forward<Func>(func)));
+        _at_destroy_tasks._q.push_back(make_task(std::forward<Func>(func)));
     }
 
     void add_task(std::unique_ptr<task>&& t) { return add_task(scheduling_group(), std::move(t)); }

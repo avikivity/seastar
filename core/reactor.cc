@@ -255,6 +255,20 @@ static decltype(auto) install_signal_handler_stack() {
     });
 }
 
+reactor::task_queue::task_queue(sstring name, unsigned shares)
+        : _reciprocal_shares(1.0f / shares), _name(name) {
+    namespace sm = seastar::metrics;
+    _metrics.add_group("scheduler", {
+        sm::make_counter(name + "_runtime_ms", [this] {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(_runtime).count();
+        }, sm::description("Accumulated runtime of this task queue; an increment rate of 1000ms per second indicates full utilization")),
+        sm::make_counter(name + "_tasks_processed", _tasks_processed,
+                sm::description("Count of tasks executing on this queue; indicates together with runtime_ms indicates length of tasks")),
+        sm::make_gauge(name + "_queue_length", [this] { return _q.size(); },
+                sm::description("Size of backlog on this queue, in tasks; indicates whether the queue is busy and/or contended")),
+    });
+}
+
 void
 reactor::adjust_scheduler_decay_factor(steady_clock_type::duration runtime) {
     auto normalized_time = _scheduler_k * runtime.count();
@@ -283,6 +297,7 @@ reactor::account_runtime(task_queue& tq, steady_clock_type::duration runtime) {
     auto old_decay_factor = _scheduler_decay_factor;
     adjust_scheduler_decay_factor(runtime);
     tq._vruntime += tq._reciprocal_shares * (_scheduler_decay_factor - old_decay_factor);
+    tq._runtime += runtime;
     renormalize_scheduler_decay_factor();
 }
 
@@ -308,6 +323,7 @@ reactor::reactor()
     , _cpu_started(0)
     , _io_context(0)
     , _io_context_available(max_aio)
+    , _at_destroy_tasks("atexit", 100)
     , _reuseport(posix_reuseport_detect())
     , _task_quota_timer_thread(&reactor::task_quota_timer_thread_fn, this) {
     _task_queues.push_back(std::make_unique<task_queue>("main", 100));
@@ -1877,6 +1893,15 @@ reactor::pending_task_count() const {
     return ret;
 }
 
+uint64_t
+reactor::tasks_processed() const {
+    uint64_t ret = 0;
+    for (auto&& tq : _task_queues) {
+        ret += tq->_tasks_processed;
+    }
+    return ret;
+}
+
 void reactor::register_metrics() {
 
     namespace sm = seastar::metrics;
@@ -1884,7 +1909,7 @@ void reactor::register_metrics() {
     _metric_groups.add_group("reactor", {
             sm::make_gauge("tasks_pending", std::bind(&reactor::pending_task_count, this), sm::description("Number of pending tasks in the queue")),
             // total_operations value:DERIVE:0:U
-            sm::make_derive("tasks_processed", _tasks_processed, sm::description("Total tasks processed")),
+            sm::make_derive("tasks_processed", std::bind(&reactor::tasks_processed, this), sm::description("Total tasks processed")),
             sm::make_derive("timers_pending", std::bind(&decltype(_timers)::size, &_timers), sm::description("Number of tasks in the timer-pending queue")),
             sm::make_gauge("idle_percent", [this] { return (1.0 - _load) * 100; }, sm::description("CPU idle percentage")),
             sm::make_derive("cpu_busy_ns", [this] () -> int64_t { return std::chrono::duration_cast<std::chrono::nanoseconds>(total_busy_time()).count(); },
@@ -1957,7 +1982,8 @@ void reactor::register_metrics() {
     });
 }
 
-void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks) {
+void reactor::run_tasks(task_queue& tq) {
+    auto& tasks = tq._q;
     STAP_PROBE(seastar, reactor_run_tasks_start);
     g_need_preempt = false;
     while (!tasks.empty()) {
@@ -1967,7 +1993,7 @@ void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks) {
         tsk->run();
         tsk.reset();
         STAP_PROBE(seastar, reactor_run_tasks_single_end);
-        ++_tasks_processed;
+        ++tq._tasks_processed;
         // check at end of loop, to allow at least one task to run
         if (need_preempt() && tasks.size() <= _max_task_backlog) {
             break;
@@ -2332,7 +2358,7 @@ reactor::run_some_tasks(steady_clock_type::time_point& t_run_completed) {
         auto* tq = _task_queue_by_vruntime.top();
         _task_queue_by_vruntime.pop();
         _current_task_queue = tq;
-        run_tasks(tq->_q);
+        run_tasks(*tq);
         _current_task_queue = nullptr;
         t_run_completed = std::chrono::steady_clock::now();
         account_runtime(*tq, t_run_completed - t_run_started);
@@ -2450,7 +2476,7 @@ int reactor::run() {
             while (have_more_tasks()) {
                 run_some_tasks(t_run_completed);
             }
-            while (!_at_destroy_tasks.empty()) {
+            while (!_at_destroy_tasks._q.empty()) {
                 run_tasks(_at_destroy_tasks);
             }
             smp::arrive_at_event_loop_end();
@@ -2461,6 +2487,7 @@ int reactor::run() {
         }
 
         if (check_for_work()) {
+            idle_end = t_run_completed;
             if (idle) {
                 _total_idle += idle_end - idle_start;
                 account_idle(idle_end - idle_start);
