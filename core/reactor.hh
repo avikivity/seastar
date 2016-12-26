@@ -704,12 +704,13 @@ private:
     uint64_t _fstream_read_aheads_discarded = 0;
     uint64_t _fstream_read_ahead_discarded_bytes = 0;
     struct task_queue {
-        explicit task_queue(unsigned shares = 100)
-            : _reciprocal_shares(1.0f / shares) {
+        explicit task_queue(sstring name, unsigned shares)
+            : _reciprocal_shares(1.0f / shares), _name(name) {
         }
         float _vruntime = 0;
         float _reciprocal_shares = 0.01;
         circular_buffer<std::unique_ptr<task>> _q;
+        sstring _name;
         struct indirect_compare {
             bool operator()(const task_queue* tq1, const task_queue* tq2) const;
         };
@@ -811,7 +812,7 @@ private:
     void renormalize_scheduler_decay_factor();
     void account_runtime(task_queue& tq, steady_clock_type::duration runtime);
     void account_idle(steady_clock_type::duration idletime);
-    void init_scheduling_group(seastar::scheduling_group sg, unsigned shares);
+    void init_scheduling_group(seastar::scheduling_group sg, sstring name, unsigned shares);
 public:
     static boost::program_options::options_description get_options_description();
     reactor();
@@ -980,7 +981,7 @@ private:
     friend void add_to_flush_poller(output_stream<char>* os);
     friend int _Unwind_RaiseException(void *h);
     seastar::metrics::metric_groups _metric_groups;
-    friend future<scheduling_group> seastar::create_scheduling_group(unsigned shares);
+    friend future<scheduling_group> seastar::create_scheduling_group(sstring name, unsigned shares);
 public:
     bool wait_and_process(int timeout = 0, const sigset_t* active_sigmask = nullptr) {
         return _backend.wait_and_process(timeout, active_sigmask);

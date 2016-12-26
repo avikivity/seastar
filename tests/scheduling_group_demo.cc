@@ -98,9 +98,10 @@ int main(int ac, char** av) {
     app_template app;
     return app.run(ac, av, [] {
         return seastar::async([] {
-            auto sg100 = seastar::create_scheduling_group(100).get0();
-            auto sg20 = seastar::create_scheduling_group(20).get0();
-            auto sg50 = seastar::create_scheduling_group(50).get0();
+            auto sg100 = seastar::create_scheduling_group("sg100", 100).get0();
+            auto sg20 = seastar::create_scheduling_group("sg20", 20).get0();
+            auto sg50 = seastar::create_scheduling_group("sg50", 50).get0();
+
             bool done = false;
             auto end = timer<>([&done] {
                 done = true;

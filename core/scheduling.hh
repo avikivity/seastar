@@ -23,6 +23,7 @@
 
 #include <utility>
 #include <type_traits>
+#include "sstring.hh"
 
 /// \file
 
@@ -53,7 +54,7 @@ std::result_of_t<Func (Args...)> execute_in_scheduling_group(scheduling_group sg
 /// Creates a scheduling group with a specified number of shares.
 ///
 /// \return a scheduling group that can be used on any shard
-future<scheduling_group> create_scheduling_group(unsigned shares);
+future<scheduling_group> create_scheduling_group(sstring name, unsigned shares);
 
 /// \brief Identifies function calls that are accounted as a group
 ///
@@ -70,7 +71,7 @@ public:
     /// Creates a `scheduling_group` object denoting the default group
     scheduling_group() noexcept : _id(0) {}
     bool active() const;
-    friend future<scheduling_group> create_scheduling_group(unsigned shares);
+    friend future<scheduling_group> create_scheduling_group(sstring name, unsigned shares);
     friend class ::reactor;
 };
 

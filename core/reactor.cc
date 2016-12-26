@@ -310,7 +310,7 @@ reactor::reactor()
     , _io_context_available(max_aio)
     , _reuseport(posix_reuseport_detect())
     , _task_quota_timer_thread(&reactor::task_quota_timer_thread_fn, this) {
-    _task_queues.push_back(std::make_unique<task_queue>(100));
+    _task_queues.push_back(std::make_unique<task_queue>("main", 100));
     _current_task_queue = nullptr;
     seastar::thread_impl::init();
     auto r = ::io_setup(max_aio, &_io_context);
@@ -3808,9 +3808,9 @@ steady_clock_type::duration reactor::total_busy_time() {
 }
 
 void
-reactor::init_scheduling_group(seastar::scheduling_group sg, unsigned shares) {
+reactor::init_scheduling_group(seastar::scheduling_group sg, sstring name, unsigned shares) {
     _task_queues.resize(std::max<size_t>(_task_queues.size(), sg._id + 1));
-    _task_queues[sg._id] = std::make_unique<task_queue>(shares);
+    _task_queues[sg._id] = std::make_unique<task_queue>(name, shares);
 }
 
 namespace seastar {
@@ -3822,12 +3822,12 @@ scheduling_group::active() const {
 }
 
 future<scheduling_group>
-create_scheduling_group(unsigned shares) {
+create_scheduling_group(sstring name, unsigned shares) {
     static std::atomic<unsigned> last{1}; // 0 is auto-created
     auto id = last.fetch_add(1);
     auto sg = scheduling_group(id);
-    return smp::invoke_on_all([sg, shares] {
-        engine().init_scheduling_group(sg, shares);
+    return smp::invoke_on_all([sg, name, shares] {
+        engine().init_scheduling_group(sg, name, shares);
     }).then([sg] {
         return make_ready_future<scheduling_group>(sg);
     });
