@@ -732,7 +732,7 @@ private:
     std::atomic<bool> _sleeping alignas(64);
     pthread_t _thread_id alignas(64) = pthread_self();
     bool _strict_o_direct = true;
-    bool& _local_need_preempt{g_need_preempt}; // for access from the _task_quota_timer_thread
+    std::atomic<int>& _local_need_preempt{g_need_preempt()}; // for access from the _task_quota_timer_thread
     std::thread _task_quota_timer_thread;
     std::atomic<bool> _dying{false};
 private:

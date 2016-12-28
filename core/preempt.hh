@@ -22,13 +22,22 @@
 #pragma once
 #include <atomic>
 
-extern __thread bool g_need_preempt;
+// A downward-counting tick counter.  At zero, we need to be preempted
+// counts down every task_quota / sched_ticks_per_period
+inline
+std::atomic<int>&
+g_need_preempt() {
+    // "extern thread_local" generates lots of stupid guards, so use this:
+    static thread_local std::atomic<int> g_need_preempt{0};
+    return g_need_preempt;
+}
+
 
 inline bool need_preempt() {
 #ifndef DEBUG
     // prevent compiler from eliminating loads in a loop
     std::atomic_signal_fence(std::memory_order_seq_cst);
-    return g_need_preempt;
+    return g_need_preempt().load(std::memory_order_relaxed) <= 0;
 #else
     return true;
 #endif

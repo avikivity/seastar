@@ -104,6 +104,11 @@ std::atomic<lowres_clock::rep> lowres_clock::_now;
 std::atomic<manual_clock::rep> manual_clock::_now;
 constexpr std::chrono::milliseconds lowres_clock::_granularity;
 
+
+static constexpr unsigned sched_ticks_per_period() {
+    return 8;
+}
+
 timespec to_timespec(steady_clock_type::time_point t) {
     using ns = std::chrono::nanoseconds;
     auto n = std::chrono::duration_cast<ns>(t.time_since_epoch()).count();
@@ -318,7 +323,8 @@ reactor::task_quota_timer_thread_fn() {
     while (!_dying.load(std::memory_order_relaxed)) {
         uint64_t events;
         _task_quota_timer.read(&events, 8);
-        _local_need_preempt = true;
+        auto oldval = _local_need_preempt.load(std::memory_order_relaxed);
+        _local_need_preempt.store(oldval - 1, std::memory_order_relaxed);
         // We're in a different thread, but guaranteed to be on the same core, so even
         // a signal fence is overdoing it
         std::atomic_signal_fence(std::memory_order_seq_cst);
@@ -327,7 +333,7 @@ reactor::task_quota_timer_thread_fn() {
 
 void
 reactor::clear_task_quota(int) {
-    g_need_preempt = true;
+    g_need_preempt().store(0, std::memory_order_relaxed);
 }
 
 template <typename T, typename E, typename EnableFunc>
@@ -2015,7 +2021,7 @@ void reactor::register_metrics() {
 
 void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks) {
     STAP_PROBE(seastar, reactor_run_tasks_start);
-    g_need_preempt = false;
+    g_need_preempt().store(sched_ticks_per_period(), std::memory_order_relaxed);
     while (!tasks.empty()) {
         auto tsk = std::move(tasks.front());
         tasks.pop_front();
@@ -2033,7 +2039,7 @@ void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks) {
 }
 
 void reactor::force_poll() {
-    g_need_preempt = true;
+    g_need_preempt().store(0, std::memory_order_relaxed);
 }
 
 bool
@@ -2449,7 +2455,8 @@ int reactor::run() {
     });
     load_timer.arm_periodic(1s);
 
-    itimerspec its = seastar::posix::to_relative_itimerspec(_task_quota, _task_quota);
+    auto tick = _task_quota / sched_ticks_per_period();
+    itimerspec its = seastar::posix::to_relative_itimerspec(tick, tick);
     _task_quota_timer.timerfd_settime(0, its);
     auto& task_quote_itimerspec = its;
 
@@ -3456,8 +3463,6 @@ bool smp::pure_poll_queues() {
     return false;
 }
 
-__thread bool g_need_preempt;
-
 __thread reactor* local_engine;
 
 class reactor_notifier_epoll : public reactor_notifier {
@@ -3793,7 +3798,7 @@ future<connected_socket> connect(socket_address sa, socket_address local, transp
 void reactor::add_high_priority_task(std::unique_ptr<task>&& t) {
     _pending_tasks.push_front(std::move(t));
     // break .then() chains
-    g_need_preempt = true;
+    g_need_preempt().store(0, std::memory_order_relaxed);
 }
 
 static
