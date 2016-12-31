@@ -26,6 +26,7 @@
 #include "task.hh"
 #include "preempt.hh"
 #include "thread_impl.hh"
+#include "exception_ptr.hh"
 #include <stdexcept>
 #include <atomic>
 #include <memory>
@@ -138,7 +139,7 @@ struct future_state {
         any() {}
         ~any() {}
         std::tuple<T...> value;
-        std::exception_ptr ex;
+        seastar::exception_ptr ex;
     } _u;
     future_state() noexcept {}
     [[gnu::always_inline]]
@@ -152,7 +153,7 @@ struct future_state {
             x._u.value.~tuple();
             break;
         case state::exception:
-            new (&_u.ex) std::exception_ptr(std::move(x._u.ex));
+            new (&_u.ex) seastar::exception_ptr(std::move(x._u.ex));
             x._u.ex.~exception_ptr();
             break;
         case state::invalid:
@@ -207,7 +208,7 @@ struct future_state {
     }
     void set_exception(std::exception_ptr ex) noexcept {
         assert(_state == state::future);
-        new (&_u.ex) std::exception_ptr(ex);
+        new (&_u.ex) seastar::exception_ptr(std::move(ex));
         _state = state::exception;
     }
     std::exception_ptr get_exception() && noexcept {
@@ -254,6 +255,11 @@ struct future_state {
         this->~future_state();
         _state = state::invalid;
     }
+    void lazy_report_exception() && {
+        assert(_state == state::exception);
+        std::move(_u.ex).report_lazy();
+        _state = state::invalid;
+    }
     using get0_return_type = std::tuple_element_t<0, std::tuple<T...>>;
     static get0_return_type get0(std::tuple<T...>&& x) {
         return std::get<0>(std::move(x));
@@ -293,7 +299,7 @@ struct future_state<> {
         any() { st = state::future; }
         ~any() {}
         state st;
-        std::exception_ptr ex;
+        seastar::exception_ptr ex;
     } _u;
     future_state() noexcept {}
     [[gnu::always_inline]]
@@ -303,7 +309,7 @@ struct future_state<> {
         } else {
             // Move ex out so future::~future() knows we've handled it
             // Moving it will reset us to invalid state
-            new (&_u.ex) std::exception_ptr(std::move(x._u.ex));
+            new (&_u.ex) seastar::exception_ptr(std::exchange(x._u.ex, {}));
             x._u.ex.~exception_ptr();
         }
         x._u.st = state::invalid;
@@ -337,7 +343,7 @@ struct future_state<> {
     }
     void set_exception(std::exception_ptr ex) noexcept {
         assert(_u.st == state::future);
-        new (&_u.ex) std::exception_ptr(ex);
+        new (&_u.ex) seastar::exception_ptr(std::move(ex));
         assert(_u.st >= state::exception_min);
     }
     std::tuple<> get() && {
@@ -345,7 +351,7 @@ struct future_state<> {
         if (_u.st >= state::exception_min) {
             // Move ex out so future::~future() knows we've handled it
             // Moving it will reset us to invalid state
-            std::rethrow_exception(std::move(_u.ex));
+            std::rethrow_exception(std::exchange(_u.ex, {}));
         }
         return {};
     }
@@ -378,6 +384,11 @@ struct future_state<> {
     std::tuple<> get_value() const noexcept {
         assert(_u.st == state::result);
         return {};
+    }
+    void lazy_report_exception() && {
+        assert(_u.st >= state::exception_min);
+        std::move(_u.ex).report_lazy();
+        _u.st = state::invalid;
     }
     void forward_to(promise<>& pr) noexcept;
 };
@@ -769,7 +780,7 @@ public:
             _promise->_future = nullptr;
         }
         if (failed()) {
-            report_failed_future(state()->get_exception());
+            std::move(*state()).lazy_report_exception();
         }
     }
     /// \brief gets the value returned by the computation
@@ -1152,7 +1163,7 @@ void promise<T...>::abandoned() noexcept {
         _future->_local_state = std::move(*_state);
         _future->_promise = nullptr;
     } else if (_state && _state->failed()) {
-        report_failed_future(_state->get_exception());
+        std::move(*_state).lazy_report_exception();
     }
 }
 

@@ -2205,6 +2205,23 @@ public:
     }
 };
 
+class reactor::exception_pollfn final : public reactor::pollfn {
+public:
+    virtual bool poll() final override {
+        seastar::exception_ptr::delete_local_pending();
+        seastar::exception_ptr::process_lazy_reports(std::cref(report_failed_future));
+        return false;
+    }
+    virtual bool pure_poll() override final {
+        return false;
+    }
+    virtual bool try_enter_interrupt_mode() override {
+        return true;
+    }
+    virtual void exit_interrupt_mode() override final {
+    }
+};
+
 class reactor::lowres_timer_pollfn final : public reactor::pollfn {
     reactor& _r;
     // A highres timer is implemented as a waking  signal; so
@@ -2384,6 +2401,7 @@ int reactor::run() {
     poller sig_poller(std::make_unique<signal_pollfn>(*this));
     poller aio_poller(std::make_unique<aio_batch_submit_pollfn>(*this));
     poller batch_flush_poller(std::make_unique<batch_flush_pollfn>(*this));
+    poller exception_poller(std::make_unique<exception_pollfn>());
 
     start_aio_eventfd_loop();
 

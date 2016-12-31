@@ -279,6 +279,7 @@ libnet = [
 
 core = [
     'core/reactor.cc',
+    'core/exception_ptr.cc',
     'core/systemwide_memory_barrier.cc',
     'core/fstream.cc',
     'core/posix.cc',

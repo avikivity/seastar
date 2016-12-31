@@ -601,6 +601,7 @@ private:
     class manual_timer_pollfn;
     class epoll_pollfn;
     class syscall_pollfn;
+    class exception_pollfn;
     friend io_pollfn;
     friend signal_pollfn;
     friend aio_batch_submit_pollfn;
@@ -608,6 +609,7 @@ private:
     friend smp_pollfn;
     friend drain_cross_cpu_freelist_pollfn;
     friend lowres_timer_pollfn;
+    friend exception_pollfn;
     friend class manual_clock;
     friend class epoll_pollfn;
     friend class syscall_pollfn;
