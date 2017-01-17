@@ -272,6 +272,7 @@ reactor::task_queue::task_queue(sstring name, unsigned shares)
         , _reciprocal_shares_times_2_power_32((uint64_t(1) << 32) / shares)
         , _name(name) {
     namespace sm = seastar::metrics;
+    auto group = sm::label("group");
     _metrics.add_group("scheduler", {
         sm::make_counter(name + "_runtime_ms", [this] {
             return std::chrono::duration_cast<std::chrono::milliseconds>(_runtime).count();

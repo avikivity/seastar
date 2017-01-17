@@ -28,8 +28,8 @@ inline
 std::atomic<int>&
 g_need_preempt() {
     // "extern thread_local" generates lots of stupid guards, so use this:
-    static thread_local std::atomic<int> g_need_preempt{0};
-    return g_need_preempt;
+    static thread_local std::atomic<int> s_need_preempt{0};
+    return s_need_preempt;
 }
 
 
