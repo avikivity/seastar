@@ -272,15 +272,19 @@ reactor::task_queue::task_queue(sstring name, unsigned shares)
         , _reciprocal_shares_times_2_power_32((uint64_t(1) << 32) / shares)
         , _name(name) {
     namespace sm = seastar::metrics;
-    auto group = sm::label("group");
+    static auto group = sm::label("group");
+    auto group_label = group(_name);
     _metrics.add_group("scheduler", {
-        sm::make_counter(name + "_runtime_ms", [this] {
+        sm::make_counter("runtime_ms", [this] {
             return std::chrono::duration_cast<std::chrono::milliseconds>(_runtime).count();
-        }, sm::description("Accumulated runtime of this task queue; an increment rate of 1000ms per second indicates full utilization")),
-        sm::make_counter(name + "_tasks_processed", _tasks_processed,
-                sm::description("Count of tasks executing on this queue; indicates together with runtime_ms indicates length of tasks")),
-        sm::make_gauge(name + "_queue_length", [this] { return _q.size(); },
-                sm::description("Size of backlog on this queue, in tasks; indicates whether the queue is busy and/or contended")),
+        }, sm::description("Accumulated runtime of this task queue; an increment rate of 1000ms per second indicates full utilization"),
+            {group_label}),
+        sm::make_counter("tasks_processed", _tasks_processed,
+                sm::description("Count of tasks executing on this queue; indicates together with runtime_ms indicates length of tasks"),
+                {group_label}),
+        sm::make_gauge("queue_length", [this] { return _q.size(); },
+                sm::description("Size of backlog on this queue, in tasks; indicates whether the queue is busy and/or contended"),
+                {group_label}),
     });
 }
 
