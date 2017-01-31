@@ -32,6 +32,8 @@ inline bool need_preempt() {
     std::atomic_signal_fence(std::memory_order_seq_cst);
     return g_need_preempt;
 #else
+    // Make scheduler think we exhausted all our ticks
+    g_need_preempt().store(0, std::memory_order_relaxed);
     return true;
 #endif
 }

@@ -607,7 +607,7 @@ cpu_pages::allocate_large_and_trim(unsigned n_pages, Trimmer trimmer) {
     span->free = span_end->free = false;
     span->span_size = span_end->span_size = t.nr_pages;
     span->pool = nullptr;
-#ifdef SEASTAR_HEAPPROF
+#ifdef SEASTAR_HEAPPROFam
     auto alloc_site = get_allocation_site();
     span->alloc_site = alloc_site;
     if (alloc_site) {

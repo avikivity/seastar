@@ -94,11 +94,20 @@ public:
             : _scheduling_group(sg), _func(std::move(func)) {
     }
     template <typename... Args>
-    std::result_of_t<Func (Args...)> operator()(Args&&... args) const {
+    std::result_of_t<Func (Args...)> operator()(Args&&... args) && {
         return impl::execute_in_scheduling_group(_scheduling_group, std::move(_func), std::forward<Args>(args)...);
+    }
+    template <typename... Args>
+    std::result_of_t<Func (Args...)> operator()(Args&&... args) & {
+        return impl::execute_in_scheduling_group(_scheduling_group, _func, std::forward<Args>(args)...);
+    }
+    template <typename... Args>
+    std::result_of_t<Func (Args...)> operator()(Args&&... args) const & {
+        return impl::execute_in_scheduling_group(_scheduling_group, _func, std::forward<Args>(args)...);
     }
     scheduling_group get_scheduling_group() const { return _scheduling_group; }
     Func&& unwrap() && { return std::move(_func); }
+    Func& unwrap() & { return _func; }
 };
 
 /// \brief Wraps a callable in a \ref scheduled_function.
@@ -153,7 +162,7 @@ inline
 auto
 rebind_scheduled_function(scheduled_function<InnerFunc>&& inner, OuterFunc&& outer) {
     return with_scheduling_group(inner.get_scheduling_group(), [outer = std::forward<OuterFunc>(outer), inner = std::forward<InnerFunc>(std::move(inner).unwrap())] (auto&&... args) mutable {
-        return outer(std::move<InnerFunc>(inner), std::forward<decltype(args)>(args)...);
+        return outer(std::move(inner), std::forward<decltype(args)>(args)...);
     });
 }
 
@@ -170,7 +179,7 @@ auto execute_in_scheduling_group_deferred_future(scheduling_group sg, Func&& fun
     using promise_type = typename result_type::promise_type;
     promise_type pr;
     auto ret = pr.get_future();
-    schedule(sg, make_task([pr = std::move(pr), func = std::move(func), args = std::make_tuple(std::move(args)...)] () mutable {
+    schedule(sg, make_task([pr = std::move(pr), func = std::move(func), args = std::make_tuple(std::forward<decltype(args)>(args)...)] () mutable {
         apply(func, std::move(args)).forward_to(std::move(pr));
     }));
     return ret;
