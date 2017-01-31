@@ -393,7 +393,7 @@ struct continuation final : task {
     continuation(Func&& func, future_state<T...>&& state) : _state(std::move(state)), _func(std::move(func)) {}
     continuation(Func&& func) : _func(std::move(func)) {}
     virtual void run() noexcept override {
-        _func(std::move(_state));
+        std::move(_func)(std::move(_state));
     }
     future_state<T...> _state;
     Func _func;
@@ -905,11 +905,11 @@ public:
         typename futurator::promise_type pr;
         auto fut = pr.get_future();
         try {
-            schedule(seastar::impl::rebind_scheduled_function(std::forward<Func>(func), [pr = std::move(pr)] (Func&& func, auto&& state) mutable {
+            schedule(seastar::impl::rebind_scheduled_function(std::forward<Func>(func), [pr = std::move(pr)] (auto&& func, auto&& state) mutable {
                 if (state.failed()) {
                     pr.set_exception(std::move(state).get_exception());
                 } else {
-                    futurator::apply(std::forward<Func>(func), std::move(state).get_value()).forward_to(std::move(pr));
+                    futurator::apply(std::forward<decltype(func)>(func), std::move(state).get_value()).forward_to(std::move(pr));
                 }
             }));
         } catch (...) {
