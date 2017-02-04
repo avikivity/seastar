@@ -188,7 +188,7 @@ struct future_state {
         return *this;
     }
     bool available() const noexcept { return _state == state::result || _state == state::exception; }
-    bool failed() const noexcept { return _state == state::exception; }
+    bool failed() const noexcept { return seastar::unlikely(_state == state::exception); }
     void wait();
     void set(const std::tuple<T...>& value) noexcept {
         assert(_state == state::future);
@@ -328,7 +328,7 @@ struct future_state<> {
         return *this;
     }
     bool available() const noexcept { return _u.st == state::result || _u.st >= state::exception_min; }
-    bool failed() const noexcept { return _u.st >= state::exception_min; }
+    bool failed() const noexcept { return seastar::unlikely(_u.st >= state::exception_min); }
     void set(const std::tuple<>& value) noexcept {
         assert(_u.st == state::future);
         _u.st = state::result;
