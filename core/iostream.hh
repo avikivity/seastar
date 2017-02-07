@@ -144,6 +144,8 @@ public:
     future<temporary_buffer<CharType>> read_exactly(size_t n);
     template <typename Consumer>
     future<> consume(Consumer& c);
+    template <typename Consumer>
+    future<> consume(std::reference_wrapper<Consumer> c);
     bool eof() { return _eof; }
     /// Returns some data from the stream, or an empty buffer on end of
     /// stream.
