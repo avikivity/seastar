@@ -238,6 +238,13 @@ input_stream<CharType>::consume(Consumer& consumer) {
 }
 
 template <typename CharType>
+template <typename Consumer>
+future<>
+input_stream<CharType>::consume(std::reference_wrapper<Consumer> c) {
+    return consume(c.get());
+}
+
+template <typename CharType>
 future<temporary_buffer<CharType>>
 input_stream<CharType>::read_up_to(size_t n) {
     using tmp_buf = temporary_buffer<CharType>;
