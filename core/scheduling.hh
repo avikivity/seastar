@@ -166,9 +166,29 @@ rebind_scheduled_function(scheduled_function<InnerFunc>&& inner, OuterFunc&& out
     });
 }
 
+template <typename T>
+struct safe_capture_helper {
+    using captured_type = T&&;
+    static captured_type capture(T& v) { return std::move(v); }
+};
+
+template <typename T>
+struct safe_capture_helper<T&> {
+    using captured_type = std::reference_wrapper<T>;
+    static captured_type capture(T& v) { return std::ref(v); }
+};
+
+template <typename Func>
+typename safe_capture_helper<Func>::captured_type
+safe_capture(std::remove_reference_t<Func>& func) {
+    return safe_capture_helper<Func>::capture(func);
+}
+
 template <typename Func, typename... Args>
 void execute_in_scheduling_group_deferred_void(scheduling_group sg, Func&& func, Args&&... args) {
-    schedule(sg, make_task([func = std::move(func), args = std::make_tuple(std::move(args)...)] () mutable {
+    //print("really deferring: %s\n", __PRETTY_FUNCTION__);
+    schedule(sg, make_task([func = safe_capture<Func>(func), args = std::make_tuple(std::move(args)...)] () mutable {
+        //print("finally running: %s %s %s\n", __PRETTY_FUNCTION__, typeid(func).name(), typeid(args).name());
         apply(func, std::move(args));
     }));
 }
@@ -179,8 +199,10 @@ auto execute_in_scheduling_group_deferred_future(scheduling_group sg, Func&& fun
     using promise_type = typename result_type::promise_type;
     promise_type pr;
     auto ret = pr.get_future();
-    schedule(sg, make_task([pr = std::move(pr), func = std::move(func), args = std::make_tuple(std::forward<decltype(args)>(args)...)] () mutable {
-        apply(func, std::move(args)).forward_to(std::move(pr));
+    schedule(sg, make_task([pr = std::move(pr), func = safe_capture<Func>(func), qargs = std::make_tuple(std::move(args)...)] () mutable {
+        //print("finally running: %s %s %s\n", __PRETTY_FUNCTION__, typeid(func).name(), typeid(qargs).name());
+        //apply([] (auto&&... qqargs) { maybe_report_size(std::forward<decltype(qqargs)>(qqargs)...); }, qargs);
+        apply(func, std::move(qargs)).forward_to(std::move(pr));
     }));
     return ret;
 }
@@ -191,16 +213,16 @@ struct execute_in_scheduling_group_deferred_dispatcher;
 template <>
 struct execute_in_scheduling_group_deferred_dispatcher<void> {
     template <typename Func, typename... Args>
-    static void go(Func&& func, Args&&... args) {
-        return execute_in_scheduling_group_deferred_void(std::forward<Func>(func), std::forward<Args>(args)...);
+    static void go(scheduling_group sg, Func&& func, Args&&... args) {
+        return execute_in_scheduling_group_deferred_void(sg, std::forward<Func>(func), std::forward<Args>(args)...);
     }
 };
 
 template <typename... T>
 struct execute_in_scheduling_group_deferred_dispatcher<future<T...>> {
     template <typename Func, typename... Args>
-    static future<T...> go(Func&& func, Args&&... args) {
-        return execute_in_scheduling_group_deferred_future(std::forward<Func>(func), std::forward<Args>(args)...);
+    static future<T...> go(scheduling_group sg, Func&& func, Args&&... args) {
+        return execute_in_scheduling_group_deferred_future(sg, std::forward<Func>(func), std::forward<Args>(args)...);
     }
 };
 
