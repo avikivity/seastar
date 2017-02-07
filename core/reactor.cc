@@ -2016,9 +2016,9 @@ void reactor::register_metrics() {
     namespace sm = seastar::metrics;
 
     _metric_groups.add_group("reactor", {
-            sm::make_gauge("tasks_pending", sm::description("Number of pending tasks in the queue"), std::bind(&reactor::pending_task_count, this), ),
+            sm::make_gauge("tasks_pending", sm::description("Number of pending tasks in the queue"), std::bind(&reactor::pending_task_count, this)),
             // total_operations value:DERIVE:0:U
-            sm::make_derive("tasks_processed", std::bind(&reactor::tasks_processed, this), sm::description("Total tasks processed")),
+            sm::make_derive("tasks_processed", sm::description("Total tasks processed"), std::bind(&reactor::tasks_processed, this)),
             sm::make_derive("polls", _polls, sm::description("Number of times pollers were executed")),
             sm::make_derive("timers_pending", std::bind(&decltype(_timers)::size, &_timers), sm::description("Number of tasks in the timer-pending queue")),
             sm::make_gauge("utilization", [this] { return _load * 100; }, sm::description("CPU utilization")),
