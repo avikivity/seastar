@@ -377,7 +377,7 @@ reactor::account_idle(steady_clock_type::duration runtime) {
 
 struct reactor::task_queue::indirect_compare {
     bool operator()(const task_queue* tq1, const task_queue* tq2) const {
-        return tq1->_vruntime > tq2->_vruntime;
+        return tq1->_vruntime < tq2->_vruntime;
     }
 };
 
