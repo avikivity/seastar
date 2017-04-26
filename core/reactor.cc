@@ -2775,10 +2775,12 @@ reactor::run_some_tasks(steady_clock_type::time_point& t_run_completed) {
         run_tasks(*tq);
         _current_task_queue = nullptr;
         t_run_completed = std::chrono::steady_clock::now();
-        account_runtime(*tq, t_run_completed - t_run_started);
+        auto delta = t_run_completed - t_run_started;
+        account_runtime(*tq, delta);
         _last_vruntime = std::max(tq->_vruntime, _last_vruntime);
         auto ticks_consumed = 1; //planned_ticks - g_need_preempt().load(std::memory_order_relaxed);
-        sched_print("run complete (%p %s); ticks consumed %d; empty %d\n", (void*)tq, tq->_name, ticks_consumed, tq->_q.empty());
+        sched_print("run complete (%p %s); ticks consumed %d, time consumed %d usec; final vruntime %d empty %d\n",
+                (void*)tq, tq->_name, ticks_consumed, delta.count(), tq->_vruntime, tq->_q.empty());
         ticks_remaining_this_period -= ticks_consumed;
         if (tq->_q.empty()) {
             // Move a planned tq here
