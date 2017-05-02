@@ -115,7 +115,7 @@ sched_print(const char* fmt, Args&&... args) {
 }
 
 static constexpr unsigned sched_ticks_per_period() {
-    return 8;
+    return 4;
 }
 
 timespec to_timespec(steady_clock_type::time_point t) {
