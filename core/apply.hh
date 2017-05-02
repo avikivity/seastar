@@ -33,7 +33,7 @@ struct apply_helper;
 template <typename Func, typename Tuple, size_t... I>
 struct apply_helper<Func, Tuple, std::index_sequence<I...>> {
     static auto apply(Func&& func, Tuple args) {
-        return func(std::get<I>(std::forward<Tuple>(args))...);
+        return std::forward<Func>(func)(std::get<I>(std::forward<Tuple>(args))...);
     }
 };
 
