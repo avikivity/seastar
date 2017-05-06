@@ -177,6 +177,38 @@ void do_until_continued(StopCondition&& stop_cond, AsyncAction&& action, promise
 
     p.set_value();
 }
+
+template<typename AsyncAction, typename StopCondition>
+void do_until_continued(StopCondition&& stop_cond, seastar::scheduled_function<AsyncAction>&& scheduled_action, promise<> p) {
+    auto sg = scheduled_action.get_scheduling_group();
+    auto action = std::move(scheduled_action).unwrap();
+    while (!stop_cond()) {
+        try {
+            auto&& f = action();
+            if (!f.available()) {
+                f.then_wrapped([sg, action = std::move(action),
+                    stop_cond = std::forward<StopCondition>(stop_cond), p = std::move(p)](std::result_of_t<AsyncAction()> fut) mutable {
+                    if (!fut.failed()) {
+                        do_until_continued(stop_cond, seastar::with_scheduling_group(sg, std::move(action)), std::move(p));
+                    } else {
+                        p.set_exception(fut.get_exception());
+                    }
+                });
+                return;
+            }
+
+            if (f.failed()) {
+                f.forward_to(std::move(p));
+                return;
+            }
+        } catch (...) {
+            p.set_exception(std::current_exception());
+            return;
+        }
+    }
+
+    p.set_value();
+}
 /// \endcond
 
 struct stop_iteration_tag { };
@@ -221,6 +253,44 @@ future<> repeat(AsyncAction&& action) {
         auto f = p.get_future();
         schedule(make_task([action = std::forward<AsyncAction>(action), p = std::move(p)]() mutable {
             repeat(std::forward<AsyncAction>(action)).forward_to(std::move(p));
+        }));
+        return f;
+    } catch (...) {
+        return make_exception_future(std::current_exception());
+    }
+}
+
+
+template <typename AsyncAction>
+future<> repeat(seastar::scheduled_function<AsyncAction>&& action) {
+    auto sg = action.get_scheduling_group();
+    auto a = std::move(action).unwrap();
+    using futurator = futurize<std::result_of_t<AsyncAction()>>;
+    static_assert(std::is_same<future<stop_iteration>, typename futurator::type>::value, "bad AsyncAction signature");
+
+    try {
+        do {
+            auto f = futurator::apply(a);
+
+            if (!f.available()) {
+                return f.then(seastar::with_scheduling_group(sg, [sg, a = std::move(a)] (stop_iteration stop) mutable {
+                    if (stop == stop_iteration::yes) {
+                        return make_ready_future<>();
+                    } else {
+                        return repeat(seastar::with_scheduling_group(sg, std::move(a)));
+                    }
+                }));
+            }
+
+            if (f.get0() == stop_iteration::yes) {
+                return make_ready_future<>();
+            }
+        } while (!need_preempt());
+
+        promise<> p;
+        auto f = p.get_future();
+        schedule(sg, make_task([sg, a = std::move(a), p = std::move(p)]() mutable {
+            repeat(seastar::with_scheduling_group(sg, std::move(a))).forward_to(std::move(p));
         }));
         return f;
     } catch (...) {
@@ -304,6 +374,51 @@ repeat_until_value(AsyncAction&& action) {
         auto f = p.get_future();
         schedule(make_task([action = std::forward<AsyncAction>(action), p = std::move(p)] () mutable {
             repeat_until_value(std::forward<AsyncAction>(action)).forward_to(std::move(p));
+        }));
+        return f;
+    } catch (...) {
+        return make_exception_future<value_type>(std::current_exception());
+    }
+}
+
+template<typename AsyncAction>
+repeat_until_value_return_type<AsyncAction>
+repeat_until_value(seastar::scheduled_function<AsyncAction>&& scheduled_action) {
+    auto sg = scheduled_action.get_scheduling_group();
+    auto action = std::move(scheduled_action).unwrap();
+    using type_helper = repeat_until_value_type_helper<std::result_of_t<AsyncAction()>>;
+    // the "T" in the documentation
+    using value_type = typename type_helper::value_type;
+    using optional_type = typename type_helper::optional_type;
+    using futurator = futurize<typename type_helper::future_optional_type>;
+    do {
+        auto f = futurator::apply(action);
+
+        if (!f.available()) {
+            return f.then(seastar::with_scheduling_group(sg, [sg, action = std::forward<AsyncAction>(action)] (auto&& optional) mutable {
+                if (optional) {
+                    return make_ready_future<value_type>(std::move(optional.value()));
+                } else {
+                    return repeat_until_value(std::forward<AsyncAction>(action));
+                }
+            }));
+        }
+
+        if (f.failed()) {
+            return make_exception_future<value_type>(f.get_exception());
+        }
+
+        optional_type&& optional = std::move(f).get0();
+        if (optional) {
+            return make_ready_future<value_type>(std::move(optional.value()));
+        }
+    } while (!need_preempt());
+
+    try {
+        promise<value_type> p;
+        auto f = p.get_future();
+        schedule(sg, make_task([sg, action = std::forward<AsyncAction>(action), p = std::move(p)] () mutable {
+            repeat_until_value(seastar::with_scheduling_group(sg, std::move(action))).forward_to(std::move(p));
         }));
         return f;
     } catch (...) {
