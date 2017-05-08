@@ -205,7 +205,8 @@ future<> repeat(seastar::scheduled_function<AsyncAction>&& action) {
     static_assert(std::is_same<future<stop_iteration>, typename futurator::type>::value, "bad AsyncAction signature");
 
     try {
-        do {
+        if (sg.active()) {
+          do {
             auto f = futurator::apply(a);
 
             if (!f.available()) {
@@ -221,7 +222,8 @@ future<> repeat(seastar::scheduled_function<AsyncAction>&& action) {
             if (f.get0() == stop_iteration::yes) {
                 return make_ready_future<>();
             }
-        } while (!need_preempt());
+          } while (!need_preempt());
+        };
 
         promise<> p;
         auto f = p.get_future();
@@ -327,7 +329,9 @@ repeat_until_value(seastar::scheduled_function<AsyncAction>&& scheduled_action) 
     using value_type = typename type_helper::value_type;
     using optional_type = typename type_helper::optional_type;
     using futurator = futurize<typename type_helper::future_optional_type>;
-    do {
+
+    if (sg.active()) {
+      do {
         auto f = futurator::apply(action);
 
         if (!f.available()) {
@@ -348,7 +352,8 @@ repeat_until_value(seastar::scheduled_function<AsyncAction>&& scheduled_action) 
         if (optional) {
             return make_ready_future<value_type>(std::move(optional.value()));
         }
-    } while (!need_preempt());
+      } while (!need_preempt());
+    }
 
     try {
         promise<value_type> p;
@@ -398,6 +403,25 @@ future<> do_until(StopCondition&& stop_cond, AsyncAction&& action) {
     }));
     return f;
 }
+
+template<typename AsyncAction, typename StopCondition>
+static inline
+future<> do_until(StopCondition&& stop_cond, seastar::scheduled_function<AsyncAction>&& scheduled_action) {
+    auto sg = scheduled_action.get_scheduling_group();
+    promise<> p;
+    auto f = p.get_future();
+    if (sg.active()) {
+        do_until_continued(std::forward<StopCondition>(stop_cond),
+                std::move(scheduled_action), std::move(p));
+    } else {
+        schedule(sg, make_task([stop_cond = std::forward<StopCondition>(stop_cond), scheduled_action = std::move(scheduled_action), p = std::move(p)] () mutable {
+            do_until_continued(std::forward<StopCondition>(stop_cond),
+                    std::move(scheduled_action), std::move(p));
+        }));
+    }
+    return f;
+}
+
 
 /// Invoke given action until it fails.
 ///
