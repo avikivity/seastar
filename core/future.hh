@@ -948,8 +948,8 @@ public:
         typename futurator::promise_type pr;
         auto fut = pr.get_future();
         try {
-            schedule(seastar::impl::rebind_scheduled_function(std::forward<Func>(func), [pr = std::move(pr)] (Func&& func, auto&& state) mutable {
-                futurator::apply(std::forward<Func>(func), future(std::move(state))).forward_to(std::move(pr));
+            schedule(seastar::impl::rebind_scheduled_function(std::forward<Func>(func), [pr = std::move(pr)] (auto&& func, auto&& state) mutable {
+                futurator::apply(std::forward<decltype(func)>(func), future(std::move(state))).forward_to(std::move(pr));
             }));
         } catch (...) {
             // catch possible std::bad_alloc in schedule() above
