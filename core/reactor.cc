@@ -114,10 +114,6 @@ sched_print(const char* fmt, Args&&... args) {
     //print(fmt, std::forward<Args>(args)...);
 }
 
-static constexpr unsigned sched_ticks_per_period() {
-    return 4;
-}
-
 timespec to_timespec(steady_clock_type::time_point t) {
     using ns = std::chrono::nanoseconds;
     auto n = std::chrono::duration_cast<ns>(t.time_since_epoch()).count();
@@ -340,9 +336,9 @@ static decltype(auto) install_signal_handler_stack() {
     });
 }
 
-reactor::task_queue::task_queue(sstring name, unsigned shares)
-        : _shares(shares)
-        , _reciprocal_shares_times_2_power_32((uint64_t(1) << 32) / shares)
+reactor::task_queue::task_queue(sstring name, std::chrono::nanoseconds period, unsigned shares)
+        : _period(period)
+        , _shares(shares)
         , _name(name) {
     namespace sm = seastar::metrics;
     static auto group = sm::label("group");
@@ -361,17 +357,8 @@ reactor::task_queue::task_queue(sstring name, unsigned shares)
     });
 }
 
-inline
-uint64_t
-reactor::task_queue::to_vruntime(steady_clock_type::duration runtime) const {
-    auto scaled = (runtime.count() * _reciprocal_shares_times_2_power_32) >> 32;
-    // Prevent overflow from returning ridiculous values
-    return std::max<int64_t>(scaled, 0);
-}
-
 void
 reactor::account_runtime(task_queue& tq, steady_clock_type::duration runtime) {
-    tq._vruntime += tq.to_vruntime(runtime);
     tq._runtime += runtime;
 }
 
@@ -382,7 +369,7 @@ reactor::account_idle(steady_clock_type::duration runtime) {
 
 struct reactor::task_queue::indirect_compare {
     bool operator()(const task_queue* tq1, const task_queue* tq2) const {
-        return tq1->_vruntime < tq2->_vruntime;
+        return tq1->deadline() < tq2->deadline();
     }
 };
 
@@ -398,7 +385,7 @@ reactor::reactor(unsigned id)
     , _cpu_started(0)
     , _io_context(0)
     , _io_context_available(max_aio)
-    , _at_destroy_tasks("atexit", 100)
+    , _at_destroy_tasks("atexit", 1s, 100)
     , _reuseport(posix_reuseport_detect())
     , _task_quota_timer_thread(&reactor::task_quota_timer_thread_fn, this)
     , _thread_pool(seastar::format("syscall-{}", id)) {
@@ -4374,9 +4361,9 @@ steady_clock_type::duration reactor::total_busy_time() {
 }
 
 void
-reactor::init_scheduling_group(seastar::scheduling_group sg, sstring name, unsigned shares) {
+reactor::init_scheduling_group(seastar::scheduling_group sg, sstring name, std::chrono::nanoseconds period, unsigned shares) {
     _task_queues.resize(std::max<size_t>(_task_queues.size(), sg._id + 1));
-    _task_queues[sg._id] = std::make_unique<task_queue>(name, shares);
+    _task_queues[sg._id] = std::make_unique<task_queue>(name, period, shares);
 }
 
 bool
@@ -4391,12 +4378,12 @@ scheduling_group::name() const {
 }
 
 future<scheduling_group>
-create_scheduling_group(sstring name, unsigned shares) {
+create_scheduling_group(sstring name, std::chrono::nanoseconds period, unsigned shares) {
     static std::atomic<unsigned> last{1}; // 0 is auto-created
     auto id = last.fetch_add(1);
     auto sg = scheduling_group(id);
     return smp::invoke_on_all([sg, name, shares] {
-        engine().init_scheduling_group(sg, name, shares);
+        engine().init_scheduling_group(sg, name, period, shares);
     }).then([sg] {
         return make_ready_future<scheduling_group>(sg);
     });

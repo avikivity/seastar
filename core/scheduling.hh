@@ -24,6 +24,7 @@
 #include <utility>
 #include <type_traits>
 #include "sstring.hh"
+#include <chrono>
 
 /// \file
 
@@ -54,7 +55,7 @@ std::result_of_t<Func (Args...)> execute_in_scheduling_group(scheduling_group sg
 /// Creates a scheduling group with a specified number of shares.
 ///
 /// \return a scheduling group that can be used on any shard
-future<scheduling_group> create_scheduling_group(sstring name, unsigned shares);
+future<scheduling_group> create_scheduling_group(sstring name, std::chrono::nanoseconds period, unsigned shares);
 
 /// \brief Identifies function calls that are accounted as a group
 ///
