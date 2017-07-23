@@ -52,6 +52,9 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/iterator/counting_iterator.hpp>
 #include <boost/range/numeric.hpp>
+#include <boost/range/algorithm/sort.hpp>
+#include <boost/range/algorithm/remove_if.hpp>
+#include <boost/algorithm/clamp.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/version.hpp>
 #include <atomic>
@@ -107,11 +110,17 @@ std::atomic<lowres_clock_impl::system_rep> lowres_clock_impl::counters::_system_
 std::atomic<manual_clock::rep> manual_clock::_now;
 constexpr std::chrono::milliseconds lowres_clock_impl::_granularity;
 
+constexpr bool sched_debug() {
+    return true;
+}
 
 template <typename... Args>
 void
 sched_print(const char* fmt, Args&&... args) {
-    //print(fmt, std::forward<Args>(args)...);
+    if (sched_debug()) {
+        print("%19d ", std::chrono::steady_clock::now().time_since_epoch() / 1us);
+        print(fmt, std::forward<Args>(args)...);
+    }
 }
 
 timespec to_timespec(steady_clock_type::time_point t) {
@@ -360,6 +369,7 @@ reactor::task_queue::task_queue(sstring name, std::chrono::nanoseconds period, u
 void
 reactor::account_runtime(task_queue& tq, steady_clock_type::duration runtime) {
     tq._runtime += runtime;
+    tq._quota_remaining -= runtime;
 }
 
 void
@@ -367,7 +377,7 @@ reactor::account_idle(steady_clock_type::duration runtime) {
     // anything to do here?
 }
 
-struct reactor::task_queue::indirect_compare {
+struct reactor::task_queue::indirect_compare_by_deadline {
     bool operator()(const task_queue* tq1, const task_queue* tq2) const {
         return tq1->deadline() < tq2->deadline();
     }
@@ -389,7 +399,7 @@ reactor::reactor(unsigned id)
     , _reuseport(posix_reuseport_detect())
     , _task_quota_timer_thread(&reactor::task_quota_timer_thread_fn, this)
     , _thread_pool(seastar::format("syscall-{}", id)) {
-    _task_queues.push_back(std::make_unique<task_queue>("main", 100));
+    _task_queues.push_back(std::make_unique<task_queue>("main", 200us, 100));
     _current_task_queue = nullptr;
     seastar::thread_impl::init();
     auto r = ::io_setup(max_aio, &_io_context);
@@ -2376,6 +2386,7 @@ void reactor::run_tasks(task_queue& tq) {
     while (!tasks.empty()) {
         auto tsk = std::move(tasks.front());
         tasks.pop_front();
+        --_tasks_pending;
         STAP_PROBE(seastar, reactor_run_tasks_single_start);
         tsk->run();
         tsk.reset();
@@ -2740,106 +2751,144 @@ void reactor::stop_aio_eventfd_loop() {
 inline
 bool
 reactor::have_more_tasks() const {
-    return _nr_active_task_queues != 0;
+    return _tasks_pending;
+}
+
+void
+reactor::rebuild_active_task_queue_list() {
+    auto now = std::chrono::steady_clock::now();
+    auto prev_sum_shares = boost::accumulate(_active_task_queues | boost::adaptors::transformed(std::mem_fn(&task_queue::_shares)), 0u);
+    if (_task_queues_deactivating) {
+        _active_task_queues.erase(boost::remove_if(_active_task_queues, std::mem_fn(&task_queue::inactive)), _active_task_queues.end());
+        _task_queues_deactivating = false;
+    }
+    auto next_sum_shares = boost::accumulate(_activating_task_queues | boost::adaptors::transformed(std::mem_fn(&task_queue::_shares)), prev_sum_shares);
+    if (next_sum_shares == 0) {
+        return;
+    }
+    auto inverse_sum_shares = 1 / float(next_sum_shares);
+    auto adjust = float(prev_sum_shares) * inverse_sum_shares;
+    auto round = [] (std::chrono::duration<float> d) { return std::chrono::duration_cast<sched_clock::duration>(d); };
+    for (auto&& tq : _active_task_queues) {
+        tq->_quota = round(tq->_period * (tq->_shares * inverse_sum_shares));
+        tq->_quota_remaining *= adjust;
+    }
+    for (auto&& tq : _activating_task_queues) {
+        tq->_quota = round(tq->_period * (tq->_shares * inverse_sum_shares));
+        tq->_quota_remaining = tq->_quota;
+        tq->_period_end = now + tq->_period;
+        tq->_active = true;
+        tq->_last_active = now;
+        _active_task_queues.push_back(tq);
+    }
+    _activating_task_queues.clear();
+    boost::sort(_active_task_queues, task_queue::indirect_compare_by_deadline());
+    if (sched_debug()) {
+        sched_print("rebuild_active_task_queue_list:\n");
+        print("%16s %12s %18s %12s %12s %12s %18s\n",
+                "tq", "name", "deadline", "q_remain", "quota", "period", "period_end");
+        for (auto&& tq : _active_task_queues) {
+            print("%16p %12s %18d %12d %12d %12d %18d\n",
+                        (void*)tq, tq->_name.c_str(), tq->deadline().time_since_epoch() / 1us,
+                        tq->_quota_remaining / 1us, tq->_quota / 1us, tq->_period / 1us, tq->_period_end.time_since_epoch() / 1us);
+        }
+    }
+}
+
+void
+reactor::next_period(sched_clock::time_point now) {
+    // queue at _task_quota_cursor exhausted its quota, find a new place for it.
+    auto tq = *_task_queue_cursor;
+    auto next_end = tq->_period_end + tq->_period;
+    if (next_end > now) {
+        tq->_period_end = next_end;
+        tq->_quota_remaining = std::max(tq->_quota_remaining, -_task_quota) + tq->_quota;
+    }
 }
 
 void
 reactor::run_some_tasks(steady_clock_type::time_point& t_run_completed) {
+    auto now = t_run_completed;
+    if (!_activating_task_queues.empty() || _task_queues_deactivating) {
+        rebuild_active_task_queue_list();
+    }
     if (!have_more_tasks()) {
         return;
     }
-    int ticks_remaining_this_period = sched_ticks_per_period();
-    auto plan_end = plan_run(ticks_remaining_this_period);
-    auto tqp = _active_task_queues.data();
+    // Check for expired periods
+    auto need_sort = false;
+    for (auto&& tq : _active_task_queues) {
+        if (tq->deadline() >= now) {
+            // If the deadline is after now, the period surely ends later
+            break;
+        }
+        if (tq->_period_end < now) {
+            tq->_period_end += tq->_period;
+            auto quota_carry_over = boost::algorithm::clamp(tq->_quota_remaining, -_task_quota, +_task_quota);
+            if (tq->_period_end < now) {
+                // We slept (or slipped) so much we missed an entire period, start from scratch
+                tq->_period_end = now + tq->_period;
+                quota_carry_over = 0s;
+            }
+            tq->_quota_remaining = tq->_quota + quota_carry_over;
+            need_sort = true;
+        }
+    }
+    if (need_sort) {
+        // FIXME: start from correct point
+        // FIXME: bubble sort is probably faster
+        boost::sort(_active_task_queues, task_queue::indirect_compare_by_deadline());
+    }
+
+    _task_queue_cursor = _active_task_queues.begin();
     STAP_PROBE(seastar, reactor_run_tasks_start);
     do {
         auto t_run_started = t_run_completed;
-        auto tq = *tqp;
-        auto planned_ticks = tq->_planned_ticks;
-        sched_print("running tq %p %s for %d ticks\n", (void*)tq, tq->_name, planned_ticks);
-        //g_need_preempt().store(planned_ticks, std::memory_order_relaxed);
+        while (_task_queue_cursor != _active_task_queues.begin()
+                && ((*_task_queue_cursor)->_quota_remaining < 0s
+                        || (*_task_queue_cursor)->_q.empty())) {
+            auto tq = *_task_queue_cursor;
+            if (tq->_q.empty() && tq->_active && tq->_last_active + tq->_period * task_queue::max_periods_idle() < t_run_started) {
+                tq->_active = false;
+                _task_queues_deactivating = true;
+            }
+            ++_task_queue_cursor;
+        }
+        if (_task_queue_cursor == _active_task_queues.end()) {
+            break;
+        }
+        auto tq = *_task_queue_cursor;
+        tq->_last_active = t_run_started;
+        sched_print("running tq %p %s quota remaining %d us\n", (void*)tq, tq->_name, tq->_quota_remaining / 1us);
         _current_task_queue = tq;
         run_tasks(*tq);
         _current_task_queue = nullptr;
         t_run_completed = std::chrono::steady_clock::now();
         auto delta = t_run_completed - t_run_started;
         account_runtime(*tq, delta);
-        _last_vruntime = std::max(tq->_vruntime, _last_vruntime);
-        auto ticks_consumed = 1; //planned_ticks - g_need_preempt().load(std::memory_order_relaxed);
-        sched_print("run complete (%p %s); ticks consumed %d, time consumed %d usec; final vruntime %d empty %d\n",
-                (void*)tq, tq->_name, ticks_consumed, delta.count(), tq->_vruntime, tq->_q.empty());
-        ticks_remaining_this_period -= ticks_consumed;
-        if (tq->_q.empty()) {
-            // Move a planned tq here
-            *tqp = *--plan_end;
-            // And move an unplanned tq here
-            *plan_end = _active_task_queues[--_nr_active_task_queues];
-            if (ticks_remaining_this_period > 0 && have_more_tasks()) {
-                tqp = _active_task_queues.data();
-                plan_end = plan_run(ticks_remaining_this_period);
-            }
-        } else {
-            ++tqp;
+        if (tq->_quota_remaining < 0s) {
+            next_period();
         }
-    } while (ticks_remaining_this_period > 0 && have_more_tasks());
+        sched_print("run complete (%p %s); time consumed %d us; quota remaining %d us empty %d\n",
+                (void*)tq, tq->_name, delta / 1us, tq->_quota_remaining / 1us, tq->_q.empty());
+        if (_task_queue_cursor == _active_task_queues.end()) {
+            break;
+        }
+    } while (!need_preempt());
     STAP_PROBE(seastar, reactor_run_tasks_end);
 }
 
-reactor::task_queue**
-reactor::plan_run(unsigned tick_budget) {
-    // Simulate a scheduling period, assuming all task queues are preempted
-    // (instead of exhausting all work), and that no new task queues are awakened.
-    // This allows us to optimize for the cpu-bound steady state.  If the assumptions
-    // are not held we will re-plan our run.
-
-    sched_print("planning a run, ticks %d active queues %d\n", tick_budget, _nr_active_task_queues);
-
-    // We will run at most tick_budget task queues, no need to sort more
-    std::partial_sort(_active_task_queues.data(),
-            _active_task_queues.data() + std::min(tick_budget, _nr_active_task_queues),
-            _active_task_queues.data() + _nr_active_task_queues,
-            task_queue::indirect_compare());
-
-    auto plan_start = _active_task_queues.data();
-    auto plan_end = plan_start;
-    auto tq_end = plan_start + _nr_active_task_queues;
-
-    while (tick_budget--) {
-        auto smallest = plan_start != plan_end ? *plan_start : nullptr;
-        if (!smallest || (plan_end < tq_end && (*plan_end)->_vruntime < smallest->_vruntime_plan_end)) {
-            smallest = *plan_end++;
-            sched_print("picking new smallest: name %s vruntime %d\n", smallest->_name, smallest->_vruntime);
-            smallest->_vruntime_plan_end = smallest->_vruntime;
-            smallest->_planned_ticks = 0;
-            // Move smallest to front
-            std::copy_backward(plan_start, plan_end - 1, plan_end);
-            *plan_start = smallest;
-        }
-        smallest->_planned_ticks += 1;
-        smallest->_vruntime_plan_end += smallest->to_vruntime(_task_quota / sched_ticks_per_period());
-        _vruntime_plan_end = smallest->_vruntime_plan_end;
-        sched_print("adjusting %s: planned %d vruntime_end %d\n", smallest->_name, smallest->_planned_ticks, smallest->_vruntime_plan_end);
-        // Re-sort the plan
-        auto newpos = std::find_if(plan_start + 1, plan_end, [&] (task_queue* pos) { return smallest->_vruntime_plan_end <= pos->_vruntime_plan_end; });
-        if (newpos != plan_start) {
-            auto n = std::copy(plan_start + 1, newpos, plan_start);
-            *n = smallest;
-        }
-    }
-    for (auto tq : boost::make_iterator_range(plan_start, plan_end)) {
-        sched_print("tq %p %s ticks %d shares %d vr %d vr_end %d\n", (void*)tq, tq->_name, tq->_planned_ticks, tq->_shares, tq->_vruntime, tq->_vruntime_plan_end);
-    }
-    return plan_end;
-}
-
 void
-reactor::reschedule(task_queue& tq) {
-    sched_print("rescheduling %p %s\n", (void*)&tq, tq._name);
-    _active_task_queues[_nr_active_task_queues++] = &tq;
-    // Don't allow a sleeper to gain an advantage
-    tq._vruntime = std::max(_last_vruntime, tq._vruntime);
-    if (tq._vruntime  + tq.to_vruntime(_task_quota / sched_ticks_per_period() )< _vruntime_plan_end) {
-        //g_need_preempt().store(0, std::memory_order_relaxed);
+reactor::activate(task_queue& tq) {
+    if (tq.active()) {
+        // If we had no tasks, then its possible our deadline was earlier. In that case
+        // roll back the cursor so we start from the beginning
+        if (tq._q.size() == 1) {
+            _task_queue_cursor = _active_task_queues.begin();
+        }
+    } else {
+        _activating_task_queues.push_back(&tq);
+        tq._active = true; // so activate() won't be called again
     }
 }
 
@@ -4382,7 +4431,7 @@ create_scheduling_group(sstring name, std::chrono::nanoseconds period, unsigned 
     static std::atomic<unsigned> last{1}; // 0 is auto-created
     auto id = last.fetch_add(1);
     auto sg = scheduling_group(id);
-    return smp::invoke_on_all([sg, name, shares] {
+    return smp::invoke_on_all([sg, name, period, shares] {
         engine().init_scheduling_group(sg, name, period, shares);
     }).then([sg] {
         return make_ready_future<scheduling_group>(sg);
