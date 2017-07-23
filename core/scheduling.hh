@@ -73,7 +73,7 @@ public:
     scheduling_group() noexcept : _id(0) {}
     bool active() const;
     const sstring& name() const;
-    friend future<scheduling_group> create_scheduling_group(sstring name, unsigned shares);
+    friend future<scheduling_group> create_scheduling_group(sstring name, std::chrono::nanoseconds period, unsigned shares);
     friend class reactor;
 };
 
