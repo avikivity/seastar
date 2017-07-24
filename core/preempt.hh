@@ -33,7 +33,7 @@ inline bool need_preempt() {
     return g_need_preempt;
 #else
     // Make scheduler think we exhausted all our ticks
-    g_need_preempt().store(0, std::memory_order_relaxed);
+    g_need_preempt = true;
     return true;
 #endif
 }
