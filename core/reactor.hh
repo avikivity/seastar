@@ -25,6 +25,7 @@
 #include "seastar.hh"
 #include "iostream.hh"
 #include "aligned_buffer.hh"
+#include "circular_buffer_fixed_size.hh"
 #include <memory>
 #include <type_traits>
 #include <libaio.h>
@@ -601,7 +602,7 @@ private:
         virtual void exit_interrupt_mode() {}
     };
     struct task_queue;
-    using task_queue_list = boost::container::static_vector<task_queue*, max_scheduling_groups()>;
+    using task_queue_list = circular_buffer_fixed_size<task_queue*, max_scheduling_groups()>;
 
     class io_pollfn;
     class signal_pollfn;
@@ -726,34 +727,23 @@ private:
     uint64_t _fsyncs = 0;
     uint64_t _cxx_exceptions = 0;
     struct task_queue {
-        explicit task_queue(sstring name, std::chrono::nanoseconds period, unsigned shares);
-        sched_clock::duration _period;
-        sched_clock::duration _quota;
-        sched_clock::duration _quota_remaining = {};
-        sched_clock::time_point _period_end;
-        sched_clock::time_point _last_active;
-        sched_clock::time_point deadline() const { return _period_end - _quota_remaining; }
-        bool _active = false;
+        explicit task_queue(sstring name, unsigned shares);
+        uint64_t _vruntime = 0;
         unsigned _shares;
-        // Maximum periods a task queue can sit in _active_task_queues, before it is removed
-        // Removal (and re-insertion) forces a quota recalculation, so better to delay it
-        static unsigned max_periods_idle() { return 5; }
+        unsigned _reciprocal_shares_times_2_power_32;
+        bool _active = false;
         steady_clock_type::duration _runtime = {};
         uint64_t _tasks_processed = 0;
         circular_buffer<std::unique_ptr<task>> _q;
         sstring _name;
-        struct indirect_compare_by_deadline;
+        uint64_t to_vruntime(steady_clock_type::duration runtime) const;
+        struct indirect_compare;
         seastar::metrics::metric_groups _metrics;
-        bool active() const { return _active; }
-        bool inactive() const { return !_active; }
     };
     boost::container::static_vector<std::unique_ptr<task_queue>, max_scheduling_groups()> _task_queues;
-    task_queue* _current_task_queue;
-    unsigned _tasks_pending = 0;
-    bool _task_queues_deactivating = false;
-    task_queue_list::iterator _task_queue_cursor; // points into _active_task_queues
-    task_queue_list _active_task_queues;  // ordered by deadline
-    task_queue_list _activating_task_queues;  // not in _active_task_queues, but recently activated
+    uint64_t _last_vruntime = 0;
+    task_queue_list _active_task_queues;
+    task_queue_list _activating_task_queues;
     task_queue _at_destroy_tasks;
     steady_clock_type::duration _task_quota;
     /// Handler that will be called when there is no task to execute on cpu.
@@ -840,13 +830,14 @@ private:
     bool posix_reuseport_detect();
     void task_quota_timer_thread_fn();
     void run_some_tasks(steady_clock_type::time_point& t_run_completed);
-    void rebuild_active_task_queue_list();
     void activate(task_queue& tq);
+    void insert_active_task_queue(task_queue* tq);
+    void insert_activating_task_queues();
     void account_runtime(task_queue& tq, steady_clock_type::duration runtime);
     void account_idle(steady_clock_type::duration idletime);
-    void next_period(sched_clock::time_point now);
-    void init_scheduling_group(scheduling_group sg, sstring name, std::chrono::nanoseconds period, unsigned shares);
+    void init_scheduling_group(scheduling_group sg, sstring name, unsigned shares);
     uint64_t tasks_processed() const;
+    uint64_t min_vruntime() const;
 public:
     static boost::program_options::options_description get_options_description(std::chrono::duration<double> default_task_quota);
     explicit reactor(unsigned id);
@@ -928,15 +919,19 @@ public:
     void add_urgent_task(std::unique_ptr<task>&& t) { return add_urgent_task(scheduling_group(), std::move(t)); }
     void add_task(scheduling_group sg, std::unique_ptr<task>&& t) {
         auto* q = _task_queues[sg._id].get();
+        bool was_empty = q->_q.empty();
         q->_q.push_back(std::move(t));
-        ++_tasks_pending;
-        activate(*q);
+        if (was_empty) {
+            activate(*q);
+        }
     }
     void add_urgent_task(scheduling_group sg, std::unique_ptr<task>&& t) {
         auto* q = _task_queues[sg._id].get();
+        bool was_empty = q->_q.empty();
         q->_q.push_front(std::move(t));
-        ++_tasks_pending;
-        activate(*q);
+        if (was_empty) {
+            activate(*q);
+        }
     }
 
     /// Set a handler that will be called when there is no task to execute on cpu.
@@ -1012,7 +1007,7 @@ private:
     friend void add_to_flush_poller(output_stream<char>* os);
     friend int ::_Unwind_RaiseException(void *h);
     metrics::metric_groups _metric_groups;
-    friend future<scheduling_group> create_scheduling_group(sstring name, std::chrono::nanoseconds period, unsigned shares);
+    friend future<scheduling_group> create_scheduling_group(sstring name, unsigned shares);
 public:
     bool wait_and_process(int timeout = 0, const sigset_t* active_sigmask = nullptr) {
         return _backend.wait_and_process(timeout, active_sigmask);
