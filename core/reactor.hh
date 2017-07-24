@@ -731,6 +731,7 @@ private:
         uint64_t _vruntime = 0;
         unsigned _shares;
         unsigned _reciprocal_shares_times_2_power_32;
+        bool _current = false;
         bool _active = false;
         steady_clock_type::duration _runtime = {};
         uint64_t _tasks_processed = 0;

@@ -2761,6 +2761,7 @@ reactor::have_more_tasks() const {
 }
 
 void reactor::insert_active_task_queue(task_queue* tq) {
+    tq->_active = true;
     auto& atq = _active_task_queues;
     auto less = task_queue::indirect_compare();
     if (atq.empty() || less(atq.back(), tq)) {
@@ -2800,9 +2801,9 @@ reactor::run_some_tasks(steady_clock_type::time_point& t_run_completed) {
         auto tq = _active_task_queues.front();
         _active_task_queues.pop_front();
         sched_print("running tq %p %s\n", (void*)tq, tq->_name);
-        tq->_active = true;
+        tq->_current = true;
         run_tasks(*tq);
-        tq->_active = false;
+        tq->_current = false;
         t_run_completed = std::chrono::steady_clock::now();
         auto delta = t_run_completed - t_run_started;
         account_runtime(*tq, delta);
@@ -2811,6 +2812,8 @@ reactor::run_some_tasks(steady_clock_type::time_point& t_run_completed) {
                 (void*)tq, tq->_name, delta / 1us, tq->_vruntime, tq->_q.empty());
         if (!tq->_q.empty()) {
             insert_active_task_queue(tq);
+        } else {
+            tq->_active = false;
         }
     } while (have_more_tasks() && !need_preempt());
     STAP_PROBE(seastar, reactor_run_tasks_end);
@@ -2818,6 +2821,9 @@ reactor::run_some_tasks(steady_clock_type::time_point& t_run_completed) {
 
 void
 reactor::activate(task_queue& tq) {
+    if (tq._active) {
+        return;
+    }
     sched_print("activating %p %s\n", (void*)&tq, tq._name);
     // Don't allow a sleeper to gain an advantage
     // FIXME: different scheduling groups have different sensitivity to jitter, take advantage
@@ -4351,7 +4357,7 @@ reactor::init_scheduling_group(seastar::scheduling_group sg, sstring name, unsig
 bool
 scheduling_group::active() const {
     auto& r = engine();
-    return r._task_queues[_id].get()->_active;
+    return r._task_queues[_id].get()->_current;
 }
 
 const sstring&
