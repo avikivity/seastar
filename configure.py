@@ -264,6 +264,7 @@ tests = [
     'tests/lowres_clock_test',
     'tests/program_options_test',
     'tests/tuple_utils_test',
+    'tests/circular_buffer_fixed_capacity_test',
     ]
 
 apps = [
@@ -484,6 +485,7 @@ deps = {
     'tests/lowres_clock_test': ['tests/lowres_clock_test.cc'] + core,
     'tests/program_options_test': ['tests/program_options_test.cc'] + core,
     'tests/tuple_utils_test': ['tests/tuple_utils_test.cc'],
+    'tests/circular_buffer_fixed_capacity_test': ['tests/circular_buffer_fixed_capacity_test.cc'],
 }
 
 boost_tests = [
