@@ -47,9 +47,6 @@ future<scheduling_group> create_scheduling_group(sstring name, unsigned shares);
 /// Executions of such tagged calls are accounted as a group.
 class scheduling_group {
     unsigned _id;
-
-    template <typename Func>
-    friend class scheduled_function;
 private:
     explicit scheduling_group(unsigned id) : _id(id) {}
 public:

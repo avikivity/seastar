@@ -74,9 +74,9 @@ run_compute_intensive_tasks(seastar::scheduling_group sg, done_func done, unsign
     return seastar::async([task, sg, concurrency, done, &counter] {
         while (!done()) {
             parallel_for_each(boost::irange(0u, concurrency), [task, sg, &counter] (unsigned i) {
-                return seastar::with_scheduling_group(sg, [task, &counter] {
+                return run_with_scheduling_group(sg, [task, &counter] {
                     return task(counter);
-                })();
+                });
             }).get();
         }
     });
