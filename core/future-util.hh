@@ -275,21 +275,23 @@ GCC6_CONCEPT( requires requires (AsyncAction aa) {
     aa().get0().value();
 } )
 repeat_until_value_return_type<AsyncAction>
-repeat_until_value(AsyncAction&& action) {
+repeat_until_value(scheduling_group sg, AsyncAction&& action) {
     using type_helper = repeat_until_value_type_helper<std::result_of_t<AsyncAction()>>;
     // the "T" in the documentation
     using value_type = typename type_helper::value_type;
     using optional_type = typename type_helper::optional_type;
     using futurator = futurize<typename type_helper::future_optional_type>;
-    do {
+
+    if (sg.may_run_immediately()) {
+      do {
         auto f = futurator::apply(action);
 
         if (!f.available()) {
-            return f.then([action = std::forward<AsyncAction>(action)] (auto&& optional) mutable {
+            return f.then(sg, [sg, action = std::forward<AsyncAction>(action)] (auto&& optional) mutable {
                 if (optional) {
                     return make_ready_future<value_type>(std::move(optional.value()));
                 } else {
-                    return repeat_until_value(std::forward<AsyncAction>(action));
+                    return repeat_until_value(sg, std::forward<AsyncAction>(action));
                 }
             });
         }
@@ -302,18 +304,31 @@ repeat_until_value(AsyncAction&& action) {
         if (optional) {
             return make_ready_future<value_type>(std::move(optional.value()));
         }
-    } while (!need_preempt());
+      } while (!need_preempt());
+    }
 
     try {
         promise<value_type> p;
         auto f = p.get_future();
-        schedule(make_task([action = std::forward<AsyncAction>(action), p = std::move(p)] () mutable {
-            repeat_until_value(std::forward<AsyncAction>(action)).forward_to(std::move(p));
+        schedule(make_task(sg, [sg, action = std::forward<AsyncAction>(action), p = std::move(p)] () mutable {
+            repeat_until_value(sg, std::forward<AsyncAction>(action)).forward_to(std::move(p));
         }));
         return f;
     } catch (...) {
         return make_exception_future<value_type>(std::current_exception());
     }
+}
+
+template<typename AsyncAction>
+GCC6_CONCEPT( requires requires (AsyncAction aa) {
+    requires is_future<decltype(aa())>::value;
+    bool(aa().get0());
+    aa().get0().value();
+} )
+inline
+repeat_until_value_return_type<AsyncAction>
+repeat_until_value(AsyncAction&& action) {
+    return repeat_until_value(scheduling_group(), std::forward<AsyncAction>(action));
 }
 
 /// Invokes given action until it fails or given condition evaluates to true.
