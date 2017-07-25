@@ -242,8 +242,14 @@ thread_local thread_context::all_thread_list thread_context::_all_threads;
 
 void
 thread_context::yield() {
-    if (!_attr.scheduling_group) {
+    if (!_attr.scheduling_group && _attr.sched_group == scheduling_group()) {
+        // FIXME: forces a poll, so bad
         later().get();
+    } else if (!_attr.scheduling_group) {
+        schedule(make_task(_attr.sched_group, [this] {
+            switch_in();
+        }));
+        switch_out();
     } else {
         auto when = _attr.scheduling_group->next_scheduling_point();
         if (when) {
@@ -327,6 +333,11 @@ void init() {
     g_unthreaded_context.link = nullptr;
     g_unthreaded_context.thread = nullptr;
     g_current_context = &g_unthreaded_context;
+}
+
+scheduling_group
+sched_group(const thread_context* thread) {
+    return thread->_attr.sched_group;
 }
 
 }

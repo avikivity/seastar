@@ -845,7 +845,7 @@ public:
     void wait() {
         auto thread = thread_impl::get();
         assert(thread);
-        schedule(scheduling_group(), [this, thread] (future_state<T...>&& new_state) {
+        schedule(seastar::thread_impl::sched_group(thread), [this, thread] (future_state<T...>&& new_state) {
             *state() = std::move(new_state);
             thread_impl::switch_in(thread);
         });
