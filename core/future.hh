@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include "function_traits.hh"
 #include "../util/gcc6-concepts.hh"
+#include "scheduling.hh"
 
 namespace seastar {
 
@@ -389,8 +390,8 @@ struct future_state<> {
 
 template <typename Func, typename... T>
 struct continuation final : task {
-    continuation(Func&& func, future_state<T...>&& state) : _state(std::move(state)), _func(std::move(func)) {}
-    continuation(Func&& func) : _func(std::move(func)) {}
+    continuation(scheduling_group sg, Func&& func, future_state<T...>&& state) : task(sg), _state(std::move(state)), _func(std::move(func)) {}
+    continuation(scheduling_group sg, Func&& func) : task(sg), _func(std::move(func)) {}
     virtual void run() noexcept override {
         _func(std::move(_state));
     }
@@ -520,8 +521,8 @@ private:
     }
 private:
     template <typename Func>
-    void schedule(Func&& func) {
-        auto tws = std::make_unique<continuation<Func, T...>>(std::move(func));
+    void schedule(scheduling_group sg, Func&& func) {
+        auto tws = std::make_unique<continuation<Func, T...>>(sg, std::move(func));
         _state = &tws->_state;
         _task = std::move(tws);
     }
@@ -720,12 +721,12 @@ private:
         return _promise ? _promise->_state : &_local_state;
     }
     template <typename Func>
-    void schedule(Func&& func) {
+    void schedule(scheduling_group sg, Func&& func) {
         if (state()->available()) {
-            ::seastar::schedule(std::make_unique<continuation<Func, T...>>(std::move(func), std::move(*state())));
+            ::seastar::schedule(std::make_unique<continuation<Func, T...>>(sg, std::move(func), std::move(*state())));
         } else {
             assert(_promise);
-            _promise->schedule(std::move(func));
+            _promise->schedule(sg, std::move(func));
             _promise->_future = nullptr;
             _promise = nullptr;
         }
@@ -761,6 +762,11 @@ private:
             }
         }
         assert(0 && "we should not be here");
+    }
+    bool may_run_immediately(scheduling_group sg) {
+        return available()
+                && !need_preempt()
+                && sg.may_run_immediately();
     }
 
     template<typename... U>
@@ -839,7 +845,7 @@ public:
     void wait() {
         auto thread = thread_impl::get();
         assert(thread);
-        schedule([this, thread] (future_state<T...>&& new_state) {
+        schedule(scheduling_group(), [this, thread] (future_state<T...>&& new_state) {
             *state() = std::move(new_state);
             thread_impl::switch_in(thread);
         });
@@ -863,7 +869,54 @@ public:
         return state()->failed();
     }
 
-    /// \brief Schedule a block of code to run when the future is ready.
+    /// \brief Schedule a block of code to run when the future is ready (variant taking a \ref scheduling_group)
+    ///
+    /// Schedules a function (often a lambda) to run when the future becomes
+    /// available.  The function is called with the result of this future's
+    /// computation as parameters.  The return value of the function becomes
+    /// the return value of then(), itself as a future; this allows then()
+    /// calls to be chained.
+    ///
+    /// If the future failed, the function is not called, and the exception
+    /// is propagated into the return value of then().
+    ///
+    /// \param sg  scheduling group to control executing time
+    /// \param func - function to be called when the future becomes available,
+    ///               unless it has failed.
+    /// \return a \c future representing the return value of \c func, applied
+    ///         to the eventual value of this future.
+    template <typename Func, typename Result = futurize_t<std::result_of_t<Func(T&&...)>>>
+    GCC6_CONCEPT( requires ::seastar::CanApply<Func, T...> )
+    Result
+    then(scheduling_group sg, Func&& func) noexcept {
+        using futurator = futurize<std::result_of_t<Func(T&&...)>>;
+        if (may_run_immediately(sg)) {
+            if (failed()) {
+                return futurator::make_exception_future(get_available_state().get_exception());
+            } else {
+                return futurator::apply(std::forward<Func>(func), get_available_state().get_value());
+            }
+        }
+        typename futurator::promise_type pr;
+        auto fut = pr.get_future();
+        try {
+            schedule(sg, [pr = std::move(pr), func = std::forward<Func>(func)] (auto&& state) mutable {
+                if (state.failed()) {
+                    pr.set_exception(std::move(state).get_exception());
+                } else {
+                    futurator::apply(func, std::move(state).get_value()).forward_to(std::move(pr));
+                }
+            });
+        } catch (...) {
+            // catch possible std::bad_alloc in schedule() above
+            // nothing can be done about it, we cannot break future chain by returning
+            // ready future while 'this' future is not ready
+            abort();
+        }
+        return fut;
+    }
+
+    /// \brief Schedule a block of code to run when the future is ready (variant using default \ref scheduling_group)
     ///
     /// Schedules a function (often a lambda) to run when the future becomes
     /// available.  The function is called with the result of this future's
@@ -882,36 +935,11 @@ public:
     GCC6_CONCEPT( requires ::seastar::CanApply<Func, T...> )
     Result
     then(Func&& func) noexcept {
-        using futurator = futurize<std::result_of_t<Func(T&&...)>>;
-        if (available() && !need_preempt()) {
-            if (failed()) {
-                return futurator::make_exception_future(get_available_state().get_exception());
-            } else {
-                return futurator::apply(std::forward<Func>(func), get_available_state().get_value());
-            }
-        }
-        typename futurator::promise_type pr;
-        auto fut = pr.get_future();
-        try {
-            schedule([pr = std::move(pr), func = std::forward<Func>(func)] (auto&& state) mutable {
-                if (state.failed()) {
-                    pr.set_exception(std::move(state).get_exception());
-                } else {
-                    futurator::apply(std::forward<Func>(func), std::move(state).get_value()).forward_to(std::move(pr));
-                }
-            });
-        } catch (...) {
-            // catch possible std::bad_alloc in schedule() above
-            // nothing can be done about it, we cannot break future chain by returning
-            // ready future while 'this' future is not ready
-            abort();
-        }
-        return fut;
+        return then(scheduling_group(), std::forward<Func>(func));
     }
 
-
     /// \brief Schedule a block of code to run when the future is ready, allowing
-    ///        for exception handling.
+    ///        for exception handling. (variant taking a \ref scheduling_group)
     ///
     /// Schedules a function (often a lambda) to run when the future becomes
     /// available.  The function is called with the this future as a parameter;
@@ -922,22 +950,23 @@ public:
     /// Unlike then(), the function will be called for both value and exceptional
     /// futures.
     ///
+    /// \param sg  scheduling group to control executing time
     /// \param func - function to be called when the future becomes available,
     /// \return a \c future representing the return value of \c func, applied
     ///         to the eventual value of this future.
     template <typename Func, typename Result = futurize_t<std::result_of_t<Func(future)>>>
     GCC6_CONCEPT( requires ::seastar::CanApply<Func, future> )
     Result
-    then_wrapped(Func&& func) noexcept {
+    then_wrapped(scheduling_group sg, Func&& func) noexcept {
         using futurator = futurize<std::result_of_t<Func(future)>>;
-        if (available() && !need_preempt()) {
+        if (may_run_immediately(sg)) {
             return futurator::apply(std::forward<Func>(func), future(get_available_state()));
         }
         typename futurator::promise_type pr;
         auto fut = pr.get_future();
         try {
-            schedule([pr = std::move(pr), func = std::forward<Func>(func)] (auto&& state) mutable {
-                futurator::apply(std::forward<Func>(func), future(std::move(state))).forward_to(std::move(pr));
+            schedule(sg, [func = std::forward<Func>(func), pr = std::move(pr)] (auto&& state) mutable {
+                futurator::apply(func, future(std::move(state))).forward_to(std::move(pr));
             });
         } catch (...) {
             // catch possible std::bad_alloc in schedule() above
@@ -946,6 +975,29 @@ public:
             abort();
         }
         return fut;
+    }
+
+    /// \brief Schedule a block of code to run when the future is ready, allowing
+    ///        for exception handling. (variant using default \ref scheduling_group)
+    ///
+    /// Schedules a function (often a lambda) to run when the future becomes
+    /// available.  The function is called with the this future as a parameter;
+    /// it will be in an available state.  The return value of the function becomes
+    /// the return value of then_wrapped(), itself as a future; this allows
+    /// then_wrapped() calls to be chained.
+    ///
+    /// Unlike then(), the function will be called for both value and exceptional
+    /// futures.
+    ///
+    /// \param sg  scheduling group to control executing time
+    /// \param func - function to be called when the future becomes available,
+    /// \return a \c future representing the return value of \c func, applied
+    ///         to the eventual value of this future.
+    template <typename Func, typename Result = futurize_t<std::result_of_t<Func(future)>>>
+    GCC6_CONCEPT( requires ::seastar::CanApply<Func, future> )
+    Result
+    then_wrapped(Func&& func) noexcept {
+        return then_wrapped(scheduling_group(), std::forward<Func>(func));
     }
 
     /// \brief Satisfy some \ref promise object with this future as a result.
