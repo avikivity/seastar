@@ -344,28 +344,47 @@ repeat_until_value(AsyncAction&& action) {
 template<typename AsyncAction, typename StopCondition>
 GCC6_CONCEPT( requires seastar::ApplyReturns<StopCondition, bool> && seastar::ApplyReturns<AsyncAction, future<>> )
 inline
-future<> do_until(StopCondition stop_cond, AsyncAction action) {
+future<> do_until(scheduling_group sg, StopCondition stop_cond, AsyncAction action) {
     using futurator = futurize<void>;
-    do {
+    if (sg.may_run_immediately()) {
+      do {
         if (stop_cond()) {
             return make_ready_future<>();
         }
         auto f = futurator::apply(action);
         if (!f.available()) {
-            return f.then([stop_cond = std::move(stop_cond), action = std::move(action)] () mutable {
-                return do_until(std::move(stop_cond), std::move(action));
+            return f.then(sg, [sg, stop_cond = std::move(stop_cond), action = std::move(action)] () mutable {
+                return do_until(sg, std::move(stop_cond), std::move(action));
             });
         }
         if (f.failed()) {
             return f;
         }
-    } while (!need_preempt());
+      } while (!need_preempt());
+    }
     promise<> pr;
     auto f = pr.get_future();
-    schedule(make_task([pr = std::move(pr), stop_cond = std::move(stop_cond), action = std::move(action)] () mutable {
-        do_until(std::move(stop_cond), std::move(action)).forward_to(std::move(pr));
+    schedule(make_task(sg, [sg, pr = std::move(pr), stop_cond = std::move(stop_cond), action = std::move(action)] () mutable {
+        do_until(sg, std::move(stop_cond), std::move(action)).forward_to(std::move(pr));
     }));
     return f;
+}
+
+/// Invokes given action until it fails or given condition evaluates to true.
+///
+/// \param stop_cond a callable taking no arguments, returning a boolean that
+///                  evalutes to true when you don't want to call \c action
+///                  any longer
+/// \param action a callable taking no arguments, returning a future<>.  Will
+///               be called again as soon as the future resolves, unless the
+///               future fails, or \c stop_cond returns \c true.
+/// \return a ready future if we stopped successfully, or a failed future if
+///         a call to to \c action failed.
+template<typename AsyncAction, typename StopCondition>
+GCC6_CONCEPT( requires seastar::ApplyReturns<StopCondition, bool> && seastar::ApplyReturns<AsyncAction, future<>> )
+inline
+future<> do_until(StopCondition stop_cond, AsyncAction action) {
+    return do_until(scheduling_group(), std::move(stop_cond), std::move(action));
 }
 
 /// Invoke given action until it fails.
