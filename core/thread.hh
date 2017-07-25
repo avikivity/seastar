@@ -28,6 +28,7 @@
 #include "future-util.hh"
 #include "timer.hh"
 #include "reactor.hh"
+#include "scheduling.hh"
 #include <memory>
 #include <setjmp.h>
 #include <type_traits>
@@ -81,7 +82,8 @@ class thread_scheduling_group;
 /// Class that holds attributes controling the behavior of a thread.
 class thread_attributes {
 public:
-    thread_scheduling_group* scheduling_group = nullptr;
+    thread_scheduling_group* scheduling_group = nullptr;  // FIXME: remove
+    seastar::scheduling_group sched_group;
 };
 
 
@@ -136,6 +138,7 @@ public:
     friend class thread;
     friend void thread_impl::switch_in(thread_context*);
     friend void thread_impl::switch_out(thread_context*);
+    friend scheduling_group thread_impl::sched_group(const thread_context*);
 };
 
 /// \endcond
