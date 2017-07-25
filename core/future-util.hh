@@ -189,20 +189,21 @@ using stop_iteration = bool_class<stop_iteration_tag>;
 template<typename AsyncAction>
 GCC6_CONCEPT( requires seastar::ApplyReturns<AsyncAction, stop_iteration> || seastar::ApplyReturns<AsyncAction, future<stop_iteration>> )
 inline
-future<> repeat(AsyncAction&& action) {
+future<> repeat(scheduling_group sg, AsyncAction&& action) {
     using futurator = futurize<std::result_of_t<AsyncAction()>>;
     static_assert(std::is_same<future<stop_iteration>, typename futurator::type>::value, "bad AsyncAction signature");
 
     try {
-        do {
+        if (sg.may_run_immediately()) {
+          do {
             auto f = futurator::apply(action);
 
             if (!f.available()) {
-                return f.then([action = std::forward<AsyncAction>(action)] (stop_iteration stop) mutable {
+                return f.then(sg, [sg, action = std::forward<AsyncAction>(action)] (stop_iteration stop) mutable {
                     if (stop == stop_iteration::yes) {
                         return make_ready_future<>();
                     } else {
-                        return repeat(std::forward<AsyncAction>(action));
+                        return repeat(sg, std::forward<AsyncAction>(action));
                     }
                 });
             }
@@ -210,18 +211,27 @@ future<> repeat(AsyncAction&& action) {
             if (f.get0() == stop_iteration::yes) {
                 return make_ready_future<>();
             }
-        } while (!need_preempt());
+          } while (!need_preempt());
+        }
 
         promise<> p;
         auto f = p.get_future();
-        schedule(make_task([action = std::forward<AsyncAction>(action), p = std::move(p)]() mutable {
-            repeat(std::forward<AsyncAction>(action)).forward_to(std::move(p));
+        schedule(make_task(sg, [sg, action = std::forward<AsyncAction>(action), p = std::move(p)]() mutable {
+            repeat(sg, std::forward<AsyncAction>(action)).forward_to(std::move(p));
         }));
         return f;
     } catch (...) {
         return make_exception_future(std::current_exception());
     }
 }
+
+template<typename AsyncAction>
+GCC6_CONCEPT( requires seastar::ApplyReturns<AsyncAction, stop_iteration> || seastar::ApplyReturns<AsyncAction, future<stop_iteration>> )
+inline
+future<> repeat(AsyncAction&& action) {
+    return repeat(scheduling_group(), std::forward<AsyncAction>(action));
+}
+
 
 /// \cond internal
 
