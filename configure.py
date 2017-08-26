@@ -262,6 +262,7 @@ tests = [
     'tests/dns_test',
     'tests/execution_stage_test',
     'tests/lowres_clock_test',
+    'tests/stall_detector_vs_exception_deadlock_test',
     ]
 
 apps = [
@@ -479,6 +480,7 @@ deps = {
     'tests/dns_test': ['tests/dns_test.cc'] + core + libnet,
     'tests/execution_stage_test': ['tests/execution_stage_test.cc'] + core,
     'tests/lowres_clock_test': ['tests/lowres_clock_test.cc'] + core,
+    'tests/stall_detector_vs_exception_deadlock_test': ['tests/stall_detector_vs_exception_deadlock_test.cc'] + core,
 }
 
 boost_tests = [
