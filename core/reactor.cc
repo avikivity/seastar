@@ -3327,7 +3327,7 @@ network_stack_registrator::network_stack_registrator(sstring name,
 }
 
 boost::program_options::options_description
-reactor::get_options_description(std::chrono::duration<double> default_task_quota) {
+reactor::get_options_description(std::chrono::duration<double> default_task_quota, std::chrono::duration<double> default_block_notifier_delay) {
     namespace bpo = boost::program_options;
     bpo::options_description opts("Core options");
     auto net_stack_names = network_stack_registry::list();
@@ -3343,7 +3343,7 @@ reactor::get_options_description(std::chrono::duration<double> default_task_quot
                 "busy-poll for disk I/O (reduces latency and increases throughput)")
         ("task-quota-ms", bpo::value<double>()->default_value(default_task_quota / 1ms), "Max time (ms) between polls")
         ("max-task-backlog", bpo::value<unsigned>()->default_value(1000), "Maximum number of task backlog to allow; above this we ignore I/O")
-        ("blocked-reactor-notify-ms", bpo::value<unsigned>()->default_value(2000), "threshold in miliseconds over which the reactor is considered blocked if no progress is made")
+        ("blocked-reactor-notify-ms", bpo::value<unsigned>()->default_value(default_block_notifier_delay / 1ms), "threshold in miliseconds over which the reactor is considered blocked if no progress is made")
         ("blocked-reactor-reports-per-minute", bpo::value<unsigned>()->default_value(5), "Maximum number of backtraces reported by stall detector per minute")
         ("relaxed-dma", "allow using buffered I/O if DMA is not available (reduces performance)")
         ("overprovisioned", "run in an overprovisioned environment (such as docker or a laptop); equivalent to --idle-poll-time-us 0 --thread-affinity 0 --poll-aio 0")

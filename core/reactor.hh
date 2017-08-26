@@ -804,7 +804,9 @@ private:
     bool posix_reuseport_detect();
     void task_quota_timer_thread_fn();
 public:
-    static boost::program_options::options_description get_options_description(std::chrono::duration<double> default_task_quota);
+    static boost::program_options::options_description get_options_description(
+            std::chrono::duration<double> default_task_quota,
+            std::chrono::duration<double> default_block_notifier_delay);
     explicit reactor(unsigned id);
     reactor(const reactor&) = delete;
     ~reactor();

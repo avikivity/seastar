@@ -35,6 +35,7 @@ public:
     struct config {
         sstring name = "App";
         std::chrono::duration<double> default_task_quota = std::chrono::milliseconds(2);
+        std::chrono::duration<double> default_block_notifier_delay = std::chrono::seconds(2);
         config() {}
     };
 private:
