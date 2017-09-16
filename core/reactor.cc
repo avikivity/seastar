@@ -400,8 +400,9 @@ reactor::account_idle(sched_clock::duration runtime) {
 }
 
 struct reactor::task_queue::indirect_compare {
+    sched_clock::duration task_quota;
     bool operator()(const task_queue* tq1, const task_queue* tq2) const {
-        return tq1->_vruntime < tq2->_vruntime;
+        return tq1->_vruntime + tq1->to_vruntime(task_quota) < tq2->_vruntime + tq2->to_vruntime(task_quota);
     }
 };
 
