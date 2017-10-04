@@ -80,7 +80,8 @@ private:
         static void initialize(Func&& from, noncopyable_function* to) {
             new (access(to)) Func(std::move(from));
         }
-        static constexpr vtable s_vtable = { call, move, destroy };
+        static constexpr vtable make_vtable() { return { call, move, destroy }; }
+        static const vtable s_vtable;
     };
     template <typename Func>
     struct indirect_vtable_for {
@@ -95,7 +96,8 @@ private:
         static void initialize(Func&& from, noncopyable_function* to) {
             to->_storage.indirect = new Func(std::move(from));
         }
-        static constexpr vtable s_vtable = { call, indirect_move, destroy };
+        static constexpr vtable make_vtable() { return { call, indirect_move, destroy }; }
+        static const vtable s_vtable;
     };
     template <typename Func, bool Direct = true>
     struct select_vtable_for : direct_vtable_for<Func> {};
@@ -151,11 +153,14 @@ constexpr typename noncopyable_function<Ret (Args...)>::vtable noncopyable_funct
 
 template <typename Ret, typename... Args>
 template <typename Func>
-const typename noncopyable_function<Ret (Args...)>::vtable noncopyable_function<Ret (Args...)>::direct_vtable_for<Func>::s_vtable;
+const typename noncopyable_function<Ret (Args...)>::vtable noncopyable_function<Ret (Args...)>::direct_vtable_for<Func>::s_vtable
+        = noncopyable_function<Ret (Args...)>::direct_vtable_for<Func>::make_vtable();
+
 
 template <typename Ret, typename... Args>
 template <typename Func>
-const typename noncopyable_function<Ret (Args...)>::vtable noncopyable_function<Ret (Args...)>::indirect_vtable_for<Func>::s_vtable;
+const typename noncopyable_function<Ret (Args...)>::vtable noncopyable_function<Ret (Args...)>::indirect_vtable_for<Func>::s_vtable
+        = noncopyable_function<Ret (Args...)>::indirect_vtable_for<Func>::make_vtable();
 
 }
 
