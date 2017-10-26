@@ -387,15 +387,31 @@ struct future_state<> {
     void forward_to(promise<>& pr) noexcept;
 };
 
+template <typename... T>
+class continuation_base : public task {
+protected:
+    future_state<T...> _state;
+public:
+    continuation_base() = default;
+    explicit continuation_base(future_state<T...>&& state) : _state(std::move(state)) {}
+    void set_state(std::tuple<T...>&& state) {
+        _state.set(std::move(state));
+    }
+    void set_state(future_state<T...>&& state) {
+        _state = std::move(state);
+    }
+    friend class promise<T...>;
+    friend class future<T...>;
+};
+
 template <typename Func, typename... T>
-struct continuation final : task {
-    continuation(Func&& func, future_state<T...>&& state) : _state(std::move(state)), _func(std::move(func)) {}
+struct continuation final : continuation_base<T...> {
+    continuation(Func&& func, future_state<T...>&& state) : continuation_base<T...>(std::move(state)), _func(std::move(func)) {}
     continuation(Func&& func) : _func(std::move(func)) {}
     virtual void run_and_dispose() noexcept override {
-        _func(std::move(_state));
+        _func(std::move(this->_state));
         delete this;
     }
-    future_state<T...> _state;
     Func _func;
 };
 
@@ -410,7 +426,7 @@ class promise {
     future<T...>* _future = nullptr;
     future_state<T...> _local_state;
     future_state<T...>* _state;
-    std::unique_ptr<task> _task;
+    std::unique_ptr<continuation_base<T...>> _task;
     static constexpr bool copy_noexcept = future_state<T...>::copy_noexcept;
 public:
     /// \brief Constructs an empty \c promise.
@@ -525,6 +541,10 @@ private:
         auto tws = std::make_unique<continuation<Func, T...>>(std::move(func));
         _state = &tws->_state;
         _task = std::move(tws);
+    }
+    void schedule(std::unique_ptr<continuation_base<T...>> callback) {
+        _state = &callback->_state;
+        _task = std::move(callback);
     }
     template<urgent Urgent>
     __attribute__((always_inline))
@@ -1123,6 +1143,19 @@ public:
     /// you want
     void ignore_ready_future() noexcept {
         state()->ignore();
+    }
+
+    void set_callback(std::unique_ptr<continuation_base<T...>> callback) {
+        if (state()->available()) {
+            callback->set_state(get_available_state());
+            ::seastar::schedule(std::move(callback));
+        } else {
+            assert(_promise);
+            _promise->schedule(std::move(callback));
+            _promise->_future = nullptr;
+            _promise = nullptr;
+        }
+
     }
 
     /// \cond internal
