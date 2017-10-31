@@ -444,6 +444,54 @@ repeat_until_value(AsyncAction action) {
     }
 }
 
+namespace internal {
+
+template <typename StopCondition, typename AsyncAction>
+class do_until_state final : public continuation_base<> {
+    promise<> _promise;
+    StopCondition _stop;
+    AsyncAction _action;
+public:
+    explicit do_until_state(StopCondition stop, AsyncAction action) : _stop(std::move(stop)), _action(std::move(action)) {}
+    future<> get_future() { return _promise.get_future(); }
+    virtual void run_and_dispose() noexcept override {
+        if (_state.available()) {
+            if (_state.failed()) {
+                _state.forward_to(_promise);
+                delete this;
+                return;
+            }
+            _state = {}; // allow next cycle to overrun state
+        }
+        try {
+            do {
+                if (_stop()) {
+                    _promise.set_value();
+                    delete this;
+                    return;
+                }
+                auto f = _action();
+                if (!f.available()) {
+                    f.set_callback(std::unique_ptr<do_until_state>(this));
+                    return;
+                }
+                if (f.failed()) {
+                    f.forward_to(std::move(_promise));
+                    delete this;
+                    return;
+                }
+            } while (!need_preempt());
+        } catch (...) {
+            _promise.set_exception(std::current_exception());
+            delete this;
+            return;
+        }
+        schedule(std::unique_ptr<task>(this));
+    }
+};
+
+}
+    
 /// Invokes given action until it fails or given condition evaluates to true.
 ///
 /// \param stop_cond a callable taking no arguments, returning a boolean that
@@ -458,6 +506,7 @@ template<typename AsyncAction, typename StopCondition>
 GCC6_CONCEPT( requires seastar::ApplyReturns<StopCondition, bool> && seastar::ApplyReturns<AsyncAction, future<>> )
 inline
 future<> do_until(StopCondition stop_cond, AsyncAction action) {
+    using namespace internal;
     using futurator = futurize<void>;
     do {
         if (stop_cond()) {
@@ -465,19 +514,18 @@ future<> do_until(StopCondition stop_cond, AsyncAction action) {
         }
         auto f = futurator::apply(action);
         if (!f.available()) {
-            return f.then([stop_cond = std::move(stop_cond), action = std::move(action)] () mutable {
-                return do_until(std::move(stop_cond), std::move(action));
-            });
+            auto task = std::make_unique<do_until_state<StopCondition, AsyncAction>>(std::move(stop_cond), std::move(action));
+            auto ret = task->get_future();
+            f.set_callback(std::move(task));
+            return ret;
         }
         if (f.failed()) {
             return f;
         }
     } while (!need_preempt());
-    promise<> pr;
-    auto f = pr.get_future();
-    schedule(make_task([pr = std::move(pr), stop_cond = std::move(stop_cond), action = std::move(action)] () mutable {
-        do_until(std::move(stop_cond), std::move(action)).forward_to(std::move(pr));
-    }));
+    auto task = std::make_unique<do_until_state<StopCondition, AsyncAction>>(std::move(stop_cond), std::move(action));
+    auto f = task->get_future();
+    schedule(std::move(task));
     return f;
 }
 
