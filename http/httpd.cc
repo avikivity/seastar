@@ -78,8 +78,10 @@ future<> connection::do_response_loop() {
 }
 
 future<> connection::start_response() {
+    print("connection::start_response()");
     if (_resp->_body_writer) {
         return _resp->write_reply_to_connection(*this).then_wrapped([this] (auto f) {
+            print("connection::start_response() - written, failed %d\n", f.failed());
             if (f.failed()) {
                 // In case of an error during the write close the connection
                 _server._respond_errors++;

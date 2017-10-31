@@ -37,15 +37,19 @@ class loopback_buffer {
     queue<temporary_buffer<char>> _q{1};
 public:
     future<> push(temporary_buffer<char>&& b) {
+        print("loopback_buffer::push(%d)\n", b.size());
         if (_aborted) {
+            print("aborted\n");
             return make_exception_future<>(std::system_error(EPIPE, std::system_category()));
         }
         return _q.push_eventually(std::move(b));
     }
     future<temporary_buffer<char>> pop() {
         if (_aborted) {
+            print("pop(): returning exception\n");
             return make_exception_future<temporary_buffer<char>>(std::system_error(EPIPE, std::system_category()));
         }
+        print("pop(): returning pop_eventually()\n");
         return _q.pop_eventually();
     }
     void shutdown() {
@@ -61,13 +65,16 @@ public:
             : _buffer(std::move(buffer)) {
     }
     future<> put(net::packet data) override {
+        print("loopback_data_sink::put(%d)\n", data.len());
         return do_with(data.release(), [this] (std::vector<temporary_buffer<char>>& bufs) {
             return do_for_each(bufs, [this] (temporary_buffer<char>& buf) {
+                print("loopback_data_sink: pushing %d\n", buf.size());
                 return _buffer->push(std::move(buf));
             });
         });
     }
     future<> close() override {
+        print("loopback_data_sink::close()\n");
         return _buffer->push({});
     }
 };
@@ -80,15 +87,21 @@ public:
             : _buffer(std::move(buffer)) {
     }
     future<temporary_buffer<char>> get() override {
+        print("loopback_data_socket_impl::get() - entry\n");
         return _buffer->pop().then_wrapped([this] (future<temporary_buffer<char>>&& b) {
+            print("loopback_data_socket_impl::get() - have buffer\n");
+            print("b.failed: %d\n", b.failed());
             _eof = b.failed();
             if (!_eof) {
                 // future::get0() is destructive, so we have to play these games
                 // FIXME: make future::get0() non-destructive
                 auto&& tmp = b.get0();
+                print("buffer empty %d\n", tmp.empty());
                 _eof = tmp.empty();
+                print("returning a buffer\n");
                 b = make_ready_future<temporary_buffer<char>>(std::move(tmp));
             }
+            print("returning input\n");
             return std::move(b);
         });
     }

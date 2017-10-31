@@ -137,6 +137,7 @@ void queue<T>::notify_not_full() {
 template <typename T>
 inline
 bool queue<T>::push(T&& data) {
+    print("queue::push()\n");
     if (_q.size() < _max) {
         _q.push(std::move(data));
         notify_not_empty();
@@ -161,14 +162,18 @@ template <typename T>
 inline
 future<T> queue<T>::pop_eventually() {
     if (empty()) {
+        print("pop_eventually: waiting\n");
         return not_empty().then([this] {
             if (_ex) {
+                print("pop_eventually: returning exception\n");
                 return make_exception_future<T>(_ex);
             } else {
+                print("pop_eventually: returning data\n");
                 return make_ready_future<T>(pop());
             }
         });
     } else {
+        print("pop_eventually: returning immediately\n");
         return make_ready_future<T>(pop());
     }
 }
@@ -176,6 +181,7 @@ future<T> queue<T>::pop_eventually() {
 template <typename T>
 inline
 future<> queue<T>::push_eventually(T&& data) {
+    print("queue::push_eventually()\n");
     if (full()) {
         return not_full().then([this, data = std::move(data)] () mutable {
             _q.push(std::move(data));

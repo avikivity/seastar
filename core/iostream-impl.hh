@@ -272,16 +272,21 @@ input_stream<CharType>::read_up_to(size_t n) {
 template <typename CharType>
 future<temporary_buffer<CharType>>
 input_stream<CharType>::read() {
+    print("input_stream::read()\n");
     using tmp_buf = temporary_buffer<CharType>;
     if (_eof) {
+        print("eof -> returning zero size\n");
         return make_ready_future<tmp_buf>();
     }
     if (_buf.empty()) {
+        print("buf empty - reading from fd\n");
         return _fd.get().then([this] (tmp_buf buf) {
+            print("read from fd, %d\n", buf.size());
             _eof = buf.empty();
             return make_ready_future<tmp_buf>(std::move(buf));
         });
     } else {
+        print("buf not empty, %d\n", _buf.size());
         return make_ready_future<tmp_buf>(std::move(_buf));
     }
 }
@@ -470,18 +475,24 @@ output_stream<CharType>::poll_flush() {
 template <typename CharType>
 future<>
 output_stream<CharType>::close() {
+    print("output_stream::close - entry, calling flush\n");
     return flush().finally([this] {
+        print("output_stream::close - flush complete\n");
         if (_in_batch) {
+            print("output_stream::close - waiting for batch\n");
             return _in_batch.value().get_future();
         } else {
             return make_ready_future();
         }
     }).then([this] {
+        print("output_stream::close - batch complete\n");
         // report final exception as close error
         if (_ex) {
+            print("output_stream::close - rethrow\n");
             std::rethrow_exception(_ex);
         }
     }).finally([this] {
+        print("output_stream::close - fd close\n");
         return _fd.close();
     });
 }

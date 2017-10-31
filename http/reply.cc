@@ -108,9 +108,11 @@ class http_chunked_data_sink_impl : public data_sink_impl {
     }
 public:
     http_chunked_data_sink_impl(output_stream<char>& out) : _out(out) {
+        print("constructing http_chunked_data_sink_impl\n");
     }
     virtual future<> put(net::packet data)  override { abort(); }
     virtual future<> put(temporary_buffer<char> buf) override {
+        print("http_chunked_data_sink_impl::put(%d)\n", buf.size());
         if (buf.size() == 0) {
             // size 0 buffer should be ignored, some server
             // may consider it an end of message
@@ -118,13 +120,16 @@ public:
         }
         auto size = buf.size();
         return write_size(size).then([this, buf = std::move(buf)] () mutable {
+            print("http_chunked_data_sink_impl::put: size written\n");
             return _out.write(buf.get(), buf.size());
         }).then([this] () mutable {
+            print("http_chunked_data_sink_impl::put: data written\n");
             return _out.write("\r\n", 2);
         });
     }
     virtual future<> close() {
-        return  make_ready_future<>();
+        print("http_chunked_data_sink_impl::close()\n");
+        return _out.flush();
     }
 };
 
@@ -151,13 +156,19 @@ void reply::write_body(const sstring& content_type, const sstring& content) {
 }
 
 future<> reply::write_reply_to_connection(connection& con) {
+    print("reply::write_reply_to_connection: entry\n");
     add_header("Transfer-Encoding", "chunked");
     return con.out().write(response_line()).then([this, &con] () mutable {
+        print("reply::write_reply_to_connection: writing headers\n");
         return write_reply_headers(con);
     }).then([&con] () mutable {
+        print("reply::write_reply_to_connection: writing separator\n");
         return con.out().write("\r\n", 2);
     }).then([this, &con] () mutable {
-        return _body_writer(make_http_chunked_output_stream(con.out()));
+        print("reply::write_reply_to_connection: writing body\n");
+        return _body_writer(make_http_chunked_output_stream(con.out())).then([] {
+            print("reply::write_reply_to_connection: done\n");
+        });
     });
 
 }
