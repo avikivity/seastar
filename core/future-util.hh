@@ -326,6 +326,49 @@ template <typename AsyncAction>
 using repeat_until_value_return_type
         = typename repeat_until_value_type_helper<std::result_of_t<AsyncAction()>>::future_type;
 
+namespace internal {
+
+template <typename T>
+class repeat_until_value_state final : public continuation_base<std::experimental::optional<T>> {
+    promise<T> _promise;
+    noncopyable_function<future<std::experimental::optional<T>> ()> _func;
+public:
+    explicit repeat_until_value_state(noncopyable_function<future<std::experimental::optional<T>> ()> func) : _func(std::move(func)) {}
+    repeat_until_value_state(std::experimental::optional<T> st, noncopyable_function<future<std::experimental::optional<T>> ()> func) : repeat_until_value_state(std::move(func)) {
+        this->_state.set(std::make_tuple(std::move(st)));
+    }
+    future<T> get_future() { return _promise.get_future(); }
+    virtual void run_and_dispose() noexcept override {
+	if (this->_state.failed()) {
+	    _promise.set_exception(this->_state.get_exception());
+	    delete this;
+	    return;
+	}
+        try {
+            do {
+                auto f = _func();
+                if (!f.available()) {
+                    f.set_callback(std::unique_ptr<repeat_until_value_state>(this));
+                    return;
+                }
+		auto ret = f.get0();
+                if (ret) {
+                    _promise.set_value(std::make_tuple(std::move(*ret)));
+                    delete this;
+                    return;
+                }
+            } while (!need_preempt());
+        } catch (...) {
+            _promise.set_exception(std::current_exception());
+            delete this;
+            return;
+        }
+        schedule(std::unique_ptr<task>(this));
+    }
+};
+
+}
+    
 /// Invokes given action until it fails or the function requests iteration to stop by returning
 /// an engaged \c future<std::experimental::optional<T>>.  The value is extracted from the
 /// \c optional, and returned, as a future, from repeat_until_value().
@@ -353,13 +396,8 @@ repeat_until_value(AsyncAction&& action) {
         auto f = futurator::apply(action);
 
         if (!f.available()) {
-            return f.then([action = std::forward<AsyncAction>(action)] (auto&& optional) mutable {
-                if (optional) {
-                    return make_ready_future<value_type>(std::move(optional.value()));
-                } else {
-                    return repeat_until_value(std::forward<AsyncAction>(action));
-                }
-            });
+	    auto state = std::make_unique<internal::repeat_until_value_state<value_type>>(std::forward<AsyncAction>(action));
+	    f.set_callback(std::move(state));
         }
 
         if (f.failed()) {
