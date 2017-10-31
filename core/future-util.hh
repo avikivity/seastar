@@ -38,6 +38,8 @@
 #include "util/tuple_utils.hh"
 #include "util/noncopyable_function.hh"
 
+#include "print.hh"
+
 namespace seastar {
 
 /// \cond internal
@@ -221,6 +223,7 @@ public:
     }
     future<> get_future() { return _promise.get_future(); }
     virtual void run_and_dispose() noexcept override {
+        print("repeater entry, failed %d\n", _state.failed());
 	if (_state.failed()) {
 	    _promise.set_exception(_state.get_exception());
 	    delete this;
