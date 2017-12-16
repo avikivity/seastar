@@ -365,6 +365,7 @@ core = [
     'core/thread.cc',
     'core/dpdk_rte.cc',
     'core/fsqual.cc',
+    'core/linux-aio.cc',
     'util/conversions.cc',
     'util/program-options.cc',
     'util/log.cc',
