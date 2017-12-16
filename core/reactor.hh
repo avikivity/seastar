@@ -730,6 +730,7 @@ private:
     std::array<::iocb, max_aio> alignas(cache_line_size) _iocb_pool;
     std::stack<::iocb*, boost::container::static_vector<::iocb*, max_aio>> _free_iocbs;
     boost::container::static_vector<::iocb*, max_aio> _pending_aio;
+    boost::container::static_vector<::iocb*, max_aio> _pending_aio_retry;
     semaphore _io_context_available;
     io_stats _io_stats;
     uint64_t _fsyncs = 0;
