@@ -454,6 +454,8 @@ public:
     virtual future<> writeable(pollable_fd_state& fd) = 0;
     virtual future<> readable_or_writeable(pollable_fd_state& fd) = 0;
     virtual void forget(pollable_fd_state& fd) = 0;
+    // Calls reactor::signal_received(signo) when relevant
+    virtual void handle_signal(int signo) = 0;
 };
 
 // reactor backend using file-descriptor & epoll, suitable for running on
@@ -468,6 +470,7 @@ private:
             promise<> pollable_fd_state::* pr, int event);
     void complete_epoll_event(pollable_fd_state& fd,
             promise<> pollable_fd_state::* pr, int events, int event);
+    static void signal_received(int signo, siginfo_t* siginfo, void* ignore);
 public:
     explicit reactor_backend_epoll(reactor* r);
     virtual ~reactor_backend_epoll() override { }
@@ -476,6 +479,7 @@ public:
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual future<> readable_or_writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
+    virtual void handle_signal(int signo) override;
 };
 
 #ifdef HAVE_OSV
@@ -869,7 +873,6 @@ private:
         void handle_signal_once(int signo, std::function<void ()>&& handler);
         static void action(int signo, siginfo_t* siginfo, void* ignore);
         static void failed_to_handle(int signo);
-
     private:
         struct signal_handler {
             signal_handler(int signo, std::function<void ()>&& handler);
