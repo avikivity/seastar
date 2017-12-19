@@ -112,6 +112,7 @@ public:
     void operator=(const pollable_fd_state&) = delete;
     void speculate_epoll(int events) { events_known |= events; }
     file_desc fd;
+    bool events_rw = false;   // single consumer for both read and write (accept())
     int events_requested = 0; // wanted by pollin/pollout promises
     int events_epoll = 0;     // installed in epoll
     int events_known = 0;     // returned from epoll
@@ -148,8 +149,9 @@ public:
     future<> write_all(net::packet& p);
     future<> readable();
     future<> writeable();
-    void abort_reader(std::exception_ptr ex);
-    void abort_writer(std::exception_ptr ex);
+    future<> readable_or_writeable();
+    void abort_reader();
+    void abort_writer();
     future<pollable_fd, socket_address> accept();
     future<size_t> sendmsg(struct msghdr *msg);
     future<size_t> recvmsg(struct msghdr *msg);
@@ -458,6 +460,7 @@ public:
     // they are called (which is fine if no file descriptors are waited on):
     virtual future<> readable(pollable_fd_state& fd) = 0;
     virtual future<> writeable(pollable_fd_state& fd) = 0;
+    virtual future<> readable_or_writeable(pollable_fd_state& fd) = 0;
     virtual void forget(pollable_fd_state& fd) = 0;
     // Methods that allow polling on a reactor_notifier. This is currently
     // used only for reactor_backend_osv, but in the future it should really
@@ -478,19 +481,16 @@ private:
             promise<> pollable_fd_state::* pr, int event);
     void complete_epoll_event(pollable_fd_state& fd,
             promise<> pollable_fd_state::* pr, int events, int event);
-    void abort_fd(pollable_fd_state& fd, std::exception_ptr ex,
-            promise<> pollable_fd_state::* pr, int event);
 public:
     reactor_backend_epoll();
     virtual ~reactor_backend_epoll() override { }
     virtual bool wait_and_process(int timeout, const sigset_t* active_sigmask) override;
     virtual future<> readable(pollable_fd_state& fd) override;
     virtual future<> writeable(pollable_fd_state& fd) override;
+    virtual future<> readable_or_writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
     virtual future<> notified(reactor_notifier *n) override;
     virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
-    void abort_reader(pollable_fd_state& fd, std::exception_ptr ex);
-    void abort_writer(pollable_fd_state& fd, std::exception_ptr ex);
 };
 
 #ifdef HAVE_OSV
@@ -1101,17 +1101,20 @@ public:
     future<> writeable(pollable_fd_state& fd) {
         return _backend.writeable(fd);
     }
+    future<> readable_or_writeable(pollable_fd_state& fd) {
+        return _backend.readable_or_writeable(fd);
+    }
     void forget(pollable_fd_state& fd) {
         _backend.forget(fd);
     }
     future<> notified(reactor_notifier *n) {
         return _backend.notified(n);
     }
-    void abort_reader(pollable_fd_state& fd, std::exception_ptr ex) {
-        return _backend.abort_reader(fd, std::move(ex));
+    void abort_reader(pollable_fd_state& fd) {
+        return fd.fd.shutdown(SHUT_RD);
     }
-    void abort_writer(pollable_fd_state& fd, std::exception_ptr ex) {
-        return _backend.abort_writer(fd, std::move(ex));
+    void abort_writer(pollable_fd_state& fd) {
+        return fd.fd.shutdown(SHUT_WR);
     }
     void enable_timer(steady_clock_type::time_point when);
     std::unique_ptr<reactor_notifier> make_reactor_notifier() {
@@ -1265,7 +1268,7 @@ size_t iovec_len(const iovec* begin, size_t len)
 inline
 future<pollable_fd, socket_address>
 reactor::accept(pollable_fd_state& listenfd) {
-    return readable(listenfd).then([&listenfd] () mutable {
+    return readable_or_writeable(listenfd).then([this, &listenfd] () mutable {
         socket_address sa;
         socklen_t sl = sizeof(&sa.u.sas);
         file_desc fd = listenfd.fd.accept(sa.u.sa, sl, SOCK_NONBLOCK | SOCK_CLOEXEC);
@@ -1415,15 +1418,20 @@ future<> pollable_fd::writeable() {
 }
 
 inline
-void
-pollable_fd::abort_reader(std::exception_ptr ex) {
-    engine().abort_reader(*_s, std::move(ex));
+future<> pollable_fd::readable_or_writeable() {
+    return engine().readable_or_writeable(*_s);
 }
 
 inline
 void
-pollable_fd::abort_writer(std::exception_ptr ex) {
-    engine().abort_writer(*_s, std::move(ex));
+pollable_fd::abort_reader() {
+    engine().abort_reader(*_s);
+}
+
+inline
+void
+pollable_fd::abort_writer() {
+    engine().abort_writer(*_s);
 }
 
 inline
