@@ -229,7 +229,7 @@ posix_server_socket_impl<Transport>::accept() {
 template <transport Transport>
 void
 posix_server_socket_impl<Transport>::abort_accept() {
-    _lfd.abort_reader(std::make_exception_ptr(std::system_error(ECONNABORTED, std::system_category())));
+    _lfd.abort_reader();
 }
 
 template <transport Transport>
@@ -281,7 +281,7 @@ posix_reuseport_server_socket_impl<Transport>::accept() {
 template <transport Transport>
 void
 posix_reuseport_server_socket_impl<Transport>::abort_accept() {
-    _lfd.abort_reader(std::make_exception_ptr(std::system_error(ECONNABORTED, std::system_category())));
+    _lfd.abort_reader();
 }
 
 template <transport Transport>
@@ -466,8 +466,8 @@ public:
     virtual future<> send(ipv4_addr dst, packet p);
     virtual void close() override {
         _closed = true;
-        _fd->abort_reader(std::make_exception_ptr(std::system_error(EPIPE, std::system_category())));
-        _fd->abort_writer(std::make_exception_ptr(std::system_error(EPIPE, std::system_category())));
+        _fd->abort_reader();
+        _fd->abort_writer();
         _fd.reset();
     }
     virtual bool is_closed() const override { return _closed; }
