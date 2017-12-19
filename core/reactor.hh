@@ -226,18 +226,6 @@ private:
     friend class readable_eventfd;
 };
 
-// The reactor_notifier interface is a simplified version of Linux's eventfd
-// interface (with semaphore behavior off, and signal() always signaling 1).
-//
-// A call to signal() causes an ongoing wait() to invoke its continuation.
-// If no wait() is ongoing, the next wait() will continue immediately.
-class reactor_notifier {
-public:
-    virtual future<> wait() = 0;
-    virtual void signal() = 0;
-    virtual ~reactor_notifier() {}
-};
-
 class thread_pool;
 class smp;
 
@@ -404,7 +392,6 @@ private:
 class thread_pool {
     uint64_t _aio_threaded_fallbacks = 0;
 #ifndef HAVE_OSV
-    // FIXME: implement using reactor_notifier abstraction we used for SMP
     syscall_work_queue inter_thread_wq;
     posix_thread _worker_thread;
     std::atomic<bool> _stopped = { false };
@@ -462,12 +449,6 @@ public:
     virtual future<> writeable(pollable_fd_state& fd) = 0;
     virtual future<> readable_or_writeable(pollable_fd_state& fd) = 0;
     virtual void forget(pollable_fd_state& fd) = 0;
-    // Methods that allow polling on a reactor_notifier. This is currently
-    // used only for reactor_backend_osv, but in the future it should really
-    // replace the above functions.
-    virtual future<> notified(reactor_notifier *n) = 0;
-    // Methods for allowing sending notifications events between threads.
-    virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() = 0;
 };
 
 // reactor backend using file-descriptor & epoll, suitable for running on
@@ -489,8 +470,6 @@ public:
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual future<> readable_or_writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
-    virtual future<> notified(reactor_notifier *n) override;
-    virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
 };
 
 #ifdef HAVE_OSV
@@ -498,7 +477,6 @@ public:
 // This implementation cannot currently wait on file descriptors, but unlike
 // reactor_backend_epoll it doesn't need file descriptors for waiting on a
 // timer, for example, so file descriptors are not necessary.
-class reactor_notifier_osv;
 class reactor_backend_osv : public reactor_backend {
 private:
     osv::newpoll::poller _poller;
@@ -511,10 +489,7 @@ public:
     virtual future<> readable(pollable_fd_state& fd) override;
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
-    virtual future<> notified(reactor_notifier *n) override;
-    virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
     void enable_timer(steady_clock_type::time_point when);
-    friend class reactor_notifier_osv;
 };
 #endif /* HAVE_OSV */
 
@@ -1107,9 +1082,6 @@ public:
     void forget(pollable_fd_state& fd) {
         _backend.forget(fd);
     }
-    future<> notified(reactor_notifier *n) {
-        return _backend.notified(n);
-    }
     void abort_reader(pollable_fd_state& fd) {
         return fd.fd.shutdown(SHUT_RD);
     }
@@ -1117,9 +1089,6 @@ public:
         return fd.fd.shutdown(SHUT_WR);
     }
     void enable_timer(steady_clock_type::time_point when);
-    std::unique_ptr<reactor_notifier> make_reactor_notifier() {
-        return _backend.make_reactor_notifier();
-    }
     /// Sets the "Strict DMA" flag.
     ///
     /// When true (default), file I/O operations must use DMA.  This is
