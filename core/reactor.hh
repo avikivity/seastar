@@ -445,6 +445,8 @@ public:
     virtual future<> writeable(pollable_fd_state& fd) = 0;
     virtual future<> readable_or_writeable(pollable_fd_state& fd) = 0;
     virtual void forget(pollable_fd_state& fd) = 0;
+    // Calls reactor::signal_received(signo) when relevant
+    virtual void handle_signal(int signo) = 0;
 };
 
 // reactor backend using file-descriptor & epoll, suitable for running on
@@ -459,6 +461,7 @@ private:
             promise<> pollable_fd_state::* pr, int event);
     void complete_epoll_event(pollable_fd_state& fd,
             promise<> pollable_fd_state::* pr, int events, int event);
+    static void signal_received(int signo, siginfo_t* siginfo, void* ignore);
 public:
     explicit reactor_backend_epoll(reactor* r);
     virtual ~reactor_backend_epoll() override { }
@@ -467,6 +470,7 @@ public:
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual future<> readable_or_writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
+    virtual void handle_signal(int signo) override;
 };
 
 #ifdef HAVE_OSV
@@ -800,8 +804,7 @@ private:
         bool pure_poll_signal() const;
         void handle_signal(int signo, std::function<void ()>&& handler);
         void handle_signal_once(int signo, std::function<void ()>&& handler);
-        static void action(int signo, siginfo_t* siginfo, void* ignore);
-
+        void signal_received(int signo);
     private:
         struct signal_handler {
             signal_handler(int signo, std::function<void ()>&& handler);
@@ -831,6 +834,7 @@ private:
     uint64_t min_vruntime() const;
     void request_preemption();
     void reset_preemption_monitor();
+    void signal_received(int signo);
 public:
     static boost::program_options::options_description get_options_description(std::chrono::duration<double> default_task_quota);
     explicit reactor(unsigned id);

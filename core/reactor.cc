@@ -201,6 +201,10 @@ reactor_backend_epoll::reactor_backend_epoll(reactor* r)
     throw_system_error_on(ret == -1);
 }
 
+void reactor::signal_received(int signo) {
+    _signals.signal_received(signo);
+}
+
 reactor::signals::signals() : _pending_signals(0) {
 }
 
@@ -212,8 +216,12 @@ reactor::signals::~signals() {
 
 reactor::signals::signal_handler::signal_handler(int signo, std::function<void ()>&& handler)
         : _handler(std::move(handler)) {
+    engine()._backend.handle_signal(signo);
+}
+
+void reactor_backend_epoll::handle_signal(int signo) {
     struct sigaction sa;
-    sa.sa_sigaction = action;
+    sa.sa_sigaction = signal_received;
     sa.sa_mask = make_empty_sigset_mask();
     sa.sa_flags = SA_SIGINFO | SA_RESTART;
     auto r = ::sigaction(signo, &sa, nullptr);
@@ -256,9 +264,13 @@ bool reactor::signals::pure_poll_signal() const {
     return _pending_signals.load(std::memory_order_relaxed);
 }
 
-void reactor::signals::action(int signo, siginfo_t* siginfo, void* ignore) {
+void reactor_backend_epoll::signal_received(int signo, siginfo_t* siginfo, void* ignore) {
+    engine()._signals.signal_received(signo);
+}
+
+void reactor::signals::signal_received(int signo) {
     engine().request_preemption();
-    engine()._signals._pending_signals.fetch_or(1ull << signo, std::memory_order_relaxed);
+    _pending_signals.fetch_or(1ull << signo, std::memory_order_relaxed);
 }
 
 // Accumulates an in-memory backtrace and flush to stderr eventually.
