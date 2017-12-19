@@ -660,7 +660,6 @@ public:
     };
 private:
     file_desc _notify_eventfd;
-    // FIXME: make _backend a unique_ptr<reactor_backend>, not a compile-time #ifdef.
 #ifdef HAVE_OSV
     reactor_backend_osv _backend;
     sched::thread _timer_thread;
@@ -669,7 +668,7 @@ private:
     condvar _timer_cond;
     s64 _timer_due = 0;
 #else
-    reactor_backend_epoll _backend;
+    std::unique_ptr<reactor_backend> _backend;
 #endif
     sigset_t _active_sigmask; // holds sigmask while sleeping with sig disabled
     std::vector<pollfn*> _pollers;
@@ -1023,20 +1022,20 @@ private:
     friend future<scheduling_group> create_scheduling_group(sstring name, float shares);
 public:
     bool wait_and_process(int timeout = 0, const sigset_t* active_sigmask = nullptr) {
-        return _backend.wait_and_process(timeout, active_sigmask);
+        return _backend->wait_and_process(timeout, active_sigmask);
     }
 
     future<> readable(pollable_fd_state& fd) {
-        return _backend.readable(fd);
+        return _backend->readable(fd);
     }
     future<> writeable(pollable_fd_state& fd) {
-        return _backend.writeable(fd);
+        return _backend->writeable(fd);
     }
     future<> readable_or_writeable(pollable_fd_state& fd) {
-        return _backend.readable_or_writeable(fd);
+        return _backend->readable_or_writeable(fd);
     }
     void forget(pollable_fd_state& fd) {
-        _backend.forget(fd);
+        _backend->forget(fd);
     }
     void abort_reader(pollable_fd_state& fd) {
         return fd.fd.shutdown(SHUT_RD);
