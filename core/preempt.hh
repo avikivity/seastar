@@ -24,13 +24,32 @@
 
 namespace seastar {
 
-extern __thread bool g_need_preempt;
+namespace internal {
+
+struct preemption_monitor {
+    // We preempt head head != tail
+    // This happens to match the Linux aio completion ring, so we can have the
+    // kernel preempt a task by queuing a completion event to an io_context.
+    std::atomic_uint32_t head;
+    std::atomic_uint32_t tail;
+};
+
+}
+
+extern __thread const internal::preemption_monitor* g_need_preempt;
 
 inline bool need_preempt() {
 #ifndef DEBUG
     // prevent compiler from eliminating loads in a loop
     std::atomic_signal_fence(std::memory_order_seq_cst);
-    return g_need_preempt;
+    auto np = g_need_preempt;
+    // We aren't reading anything from the ring, so we don't need
+    // any barriers.
+    auto head = np->head.load(std::memory_order_relaxed);
+    auto tail = np->tail.load(std::memory_order_relaxed);
+    // Possible optimization: read head and tail in a single 64-bit load,
+    // and find a funky way to compare the two 32-bit halves.
+    return head != tail;
 #else
     return true;
 #endif

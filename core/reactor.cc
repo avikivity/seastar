@@ -252,7 +252,7 @@ bool reactor::signals::pure_poll_signal() const {
 }
 
 void reactor::signals::action(int signo, siginfo_t* siginfo, void* ignore) {
-    g_need_preempt = true;
+    engine().request_preemption();
     engine()._signals._pending_signals.fetch_or(1ull << signo, std::memory_order_relaxed);
 }
 
@@ -432,6 +432,7 @@ reactor::reactor(unsigned id)
     _task_queues.push_back(std::make_unique<task_queue>(0, "main", 1000));
     _task_queues.push_back(std::make_unique<task_queue>(1, "atexit", 1000));
     _at_destroy_tasks = _task_queues.back().get();
+    g_need_preempt = &_preemption_monitor;
     seastar::thread_impl::init();
     for (unsigned i = 0; i != max_aio; ++i) {
         _free_iocbs.push(&_iocb_pool[i]);
@@ -484,6 +485,16 @@ reactor::~reactor() {
     eraser(_expired_lowres_timers);
     eraser(_expired_manual_timers);
     io_destroy(_io_context);
+}
+
+void
+reactor::reset_preemption_monitor() {
+    _preemption_monitor.head.store(0, std::memory_order_relaxed);
+}
+
+void
+reactor::request_preemption() {
+    _preemption_monitor.head.store(1, std::memory_order_relaxed);
 }
 
 // Add to an atomic integral non-atomically and returns the previous value
@@ -563,7 +574,7 @@ reactor::task_quota_timer_thread_fn() {
     {
         uint64_t events;
         _task_quota_timer.read(&events, 8);
-        _local_need_preempt = true;
+        request_preemption();
     }
     block_notifier_rate_limiter rate_limit(unsigned(60s / _task_quota), _stall_detector_reports_per_minute, _id);
     uint64_t saved_missed_ticks = 0;
@@ -571,7 +582,7 @@ reactor::task_quota_timer_thread_fn() {
     while (!_dying.load(std::memory_order_relaxed)) {
         uint64_t events;
         _task_quota_timer.read(&events, 8);
-        _local_need_preempt = true;
+        request_preemption();
 
         auto missed_ticks = _stall_detector_missed_ticks.load(std::memory_order_relaxed);
         rate_limit.tick(std::max(uint64_t(1), missed_ticks - saved_missed_ticks));
@@ -2483,7 +2494,7 @@ void reactor::run_tasks(task_queue& tq) {
 }
 
 void reactor::force_poll() {
-    g_need_preempt = true;
+    request_preemption();
 }
 
 bool
@@ -2859,7 +2870,7 @@ reactor::run_some_tasks(sched_clock::time_point& t_run_completed) {
         return;
     }
     sched_print("run_some_tasks: start");
-    g_need_preempt = false;
+    reset_preemption_monitor();
     STAP_PROBE(seastar, reactor_run_tasks_start);
     do {
         auto t_run_started = t_run_completed;
@@ -4035,7 +4046,8 @@ bool smp::pure_poll_queues() {
     return false;
 }
 
-__thread bool g_need_preempt;
+internal::preemption_monitor bootstrap_preemption_monitor{};
+__thread const internal::preemption_monitor* g_need_preempt = &bootstrap_preemption_monitor;
 
 __thread reactor* local_engine;
 
@@ -4250,7 +4262,7 @@ future<connected_socket> connect(socket_address sa, socket_address local, transp
 void reactor::add_high_priority_task(std::unique_ptr<task>&& t) {
     add_urgent_task(std::move(t));
     // break .then() chains
-    g_need_preempt = true;
+    request_preemption();
 }
 
 static
