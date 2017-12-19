@@ -295,6 +295,21 @@ reactor_backend_epoll::reactor_backend_epoll(reactor* r)
     throw_system_error_on(ret == -1);
 }
 
+void reactor_backend_epoll::start_tick() {
+    _task_quota_timer_thread = std::thread(&reactor::task_quota_timer_thread_fn, _r);
+
+    ::sched_param sp;
+    sp.sched_priority = 1;
+    auto sched_ok = pthread_setschedparam(_task_quota_timer_thread.native_handle(), SCHED_FIFO, &sp);
+    if (sched_ok != 0 && _r->_id == 0) {
+        seastar_logger.warn("Unable to set SCHED_FIFO scheduling policy for timer thread; latency impact possible. Try adding CAP_SYS_NICE");
+    }
+}
+
+void reactor_backend_epoll::stop_tick() {
+    _task_quota_timer_thread.join();
+}
+
 void reactor::signal_received(int signo) {
     _signals.signal_received(signo);
 }
@@ -539,13 +554,13 @@ reactor::reactor(unsigned id)
     , _cpu_started(0)
     , _io_context(0)
     , _reuseport(posix_reuseport_detect())
-    , _task_quota_timer_thread(&reactor::task_quota_timer_thread_fn, this)
     , _thread_pool(this, seastar::format("syscall-{}", id)) {
     _task_queues.push_back(std::make_unique<task_queue>(0, "main", 1000));
     _task_queues.push_back(std::make_unique<task_queue>(1, "atexit", 1000));
     _at_destroy_tasks = _task_queues.back().get();
     g_need_preempt = &_preemption_monitor;
     seastar::thread_impl::init();
+    _backend.start_tick();
     for (unsigned i = 0; i != max_aio; ++i) {
         _free_iocbs.push(&_iocb_pool[i]);
     }
@@ -585,7 +600,7 @@ reactor::~reactor() {
     assert(r == 0);
 
     _dying.store(true, std::memory_order_relaxed);
-    _task_quota_timer_thread.join();
+    _backend.stop_tick();
     timer_delete(_steady_clock_timer);
     auto eraser = [](auto& list) {
         while (!list.empty()) {
@@ -3076,13 +3091,6 @@ int reactor::run() {
         io_poller = poller(std::make_unique<io_pollfn>(*this));
 #endif
         aio_poller = poller(std::make_unique<aio_batch_submit_pollfn>(*this));
-    }
-
-    ::sched_param sp;
-    sp.sched_priority = 1;
-    auto sched_ok = pthread_setschedparam(_task_quota_timer_thread.native_handle(), SCHED_FIFO, &sp);
-    if (sched_ok != 0 && _id == 0) {
-        seastar_logger.warn("Unable to set SCHED_FIFO scheduling policy for timer thread; latency impact possible. Try adding CAP_SYS_NICE");
     }
 
     poller sig_poller(std::make_unique<signal_pollfn>(*this));
