@@ -463,6 +463,8 @@ public:
     virtual void request_preemption() = 0;
 };
 
+class reactor_backend_selector;
+
 // reactor backend using file-descriptor & epoll, suitable for running on
 // Linux. Can wait on multiple file descriptors, and converts other events
 // (such as timers, signals, inter-thread notifications) into file descriptors
@@ -919,7 +921,7 @@ private:
     void service_highres_timer();
 public:
     static boost::program_options::options_description get_options_description(std::chrono::duration<double> default_task_quota);
-    explicit reactor(unsigned id);
+    explicit reactor(unsigned id, reactor_backend_selector rbs);
     reactor(const reactor&) = delete;
     ~reactor();
     void operator=(const reactor&) = delete;
@@ -1277,7 +1279,7 @@ public:
 private:
     static void start_all_queues();
     static void pin(unsigned cpu_id);
-    static void allocate_reactor(unsigned id);
+    static void allocate_reactor(unsigned id, reactor_backend_selector rbs);
     static void create_thread(std::function<void ()> thread_loop);
 public:
     static unsigned count;
