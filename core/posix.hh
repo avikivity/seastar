@@ -35,6 +35,7 @@
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <sys/mman.h>
+#include <sys/signalfd.h>
 #include <signal.h>
 #include <system_error>
 #include <boost/optional.hpp>
@@ -118,6 +119,11 @@ public:
     static file_desc timerfd_create(int clockid, int flags) {
         int fd = ::timerfd_create(clockid, flags);
         throw_system_error_on(fd == -1, "timerfd_create");
+        return file_desc(fd);
+    }
+    static file_desc signalfd(const sigset_t* mask, int flags) {
+        int fd = ::signalfd(-1, mask, flags);
+        throw_system_error_on(fd == -1, "signalfd");
         return file_desc(fd);
     }
     static file_desc temporary(sstring directory);
@@ -291,6 +297,10 @@ public:
     void timerfd_settime(int flags, const itimerspec& its) {
         auto r = ::timerfd_settime(_fd, flags, &its, NULL);
         throw_system_error_on(r == -1, "timerfd_settime");
+    }
+    void update_signalfd(const sigset_t* mask, int flags) {
+        int r = ::signalfd(_fd, mask, flags);
+        throw_system_error_on(r == -1, "signalfd");
     }
 
     mmap_area map(size_t size, unsigned prot, unsigned flags, size_t offset,
