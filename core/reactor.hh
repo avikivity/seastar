@@ -449,6 +449,7 @@ public:
     virtual void handle_signal(int signo) = 0;
     virtual void start_tick() = 0;
     virtual void stop_tick() = 0;
+    virtual void reset_preemption_monitor() = 0;
 };
 
 // reactor backend using file-descriptor & epoll, suitable for running on
@@ -476,6 +477,7 @@ public:
     virtual void handle_signal(int signo) override;
     virtual void start_tick() override;
     virtual void stop_tick() override;
+    virtual void reset_preemption_monitor() override;
 };
 
 #ifdef HAVE_OSV

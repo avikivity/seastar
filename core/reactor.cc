@@ -522,7 +522,11 @@ reactor::~reactor() {
 
 void
 reactor::reset_preemption_monitor() {
-    _preemption_monitor.head.store(0, std::memory_order_relaxed);
+    return _backend->reset_preemption_monitor();
+}
+
+void reactor_backend_epoll::reset_preemption_monitor() {
+    _r->_preemption_monitor.head.store(0, std::memory_order_relaxed);
 }
 
 void
