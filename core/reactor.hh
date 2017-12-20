@@ -620,6 +620,7 @@ private:
     friend class execution_stage_pollfn;
     friend class file_data_source_impl; // for fstream statistics
     friend class reactor_backend_epoll;
+    friend class reactor_backend_aio;
 public:
     class poller {
         std::unique_ptr<pollfn> _pollfn;

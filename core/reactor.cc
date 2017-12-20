@@ -46,6 +46,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/eventfd.h>
+#include <sys/poll.h>
 #include <boost/filesystem.hpp>
 #include <boost/thread/barrier.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -191,6 +192,185 @@ syscall_result_extra<Extra>
 wrap_syscall(int result, const Extra& extra) {
     return {result, extra, errno};
 }
+
+
+class reactor_backend_aio : public reactor_backend {
+    reactor* _r;
+    // We use two aio contexts, one for preempting events (the timer tick and
+    // signals), the other for non-preempting events (fd poll).
+    ::aio_context_t _preempting_io{}; // Used for the timer tick and signals
+    ::aio_context_t _polling_io{}; // FIXME: unify with disk aio_context
+    file_desc _signalfd = make_signalfd();
+    ::iocb _task_quota_timer_iocb;
+    ::iocb _signalfd_iocb;
+    bool _task_quota_timer_in_preempting_io = false;
+    bool _signalfd_in_preempting_io = false;
+    bool _signalfd_in_polling_io = false;
+private:
+    static file_desc make_signalfd() {
+        ::sigset_t sigset;
+        ::sigemptyset(&sigset);
+        return file_desc::signalfd(&sigset, SFD_CLOEXEC|SFD_NONBLOCK);
+    }
+    void process_signals() {
+        signalfd_siginfo si;
+        auto ret = _signalfd.read(&si, sizeof(si));
+        if (!ret) {
+            // Since we await _signalfd from two aio contexts, we can
+            // get false positives
+            return;
+        }
+        _r->signal_received(si.ssi_signo);
+    }
+    void process_task_quota_timer() {
+        uint64_t v;
+        _r->_task_quota_timer.read(&v, 8);
+    }
+    bool service_preempting_io() {
+        ::io_event a[2];
+        auto r = io_getevents(_preempting_io, 0, 2, a, 0);
+        assert(r != -1);
+        bool did_work = false;
+        for (unsigned i = 0; i != unsigned(r); ++i) {
+            if (get_iocb(a[i]) == &_task_quota_timer_iocb) {
+                _task_quota_timer_in_preempting_io = false;
+                process_task_quota_timer();
+            } else if (get_iocb(a[i]) == &_signalfd_iocb) {
+                _signalfd_in_preempting_io = false;
+                process_signals();
+                did_work = true;
+            }
+        }
+        return did_work;
+    }
+    void replenish(::aio_context_t context, ::iocb iocb, bool& in) {
+        if (!in) {
+            ::iocb* a[1] = { &iocb };
+            io_submit(context, 1, a);
+            in = true;
+        }
+    }
+    bool await_events(int timeout) {
+        ::timespec ts = {};
+        ::timespec* tsp = [&] () -> ::timespec* {
+            if (timeout == 0) {
+                return &ts;
+            } else if (timeout == -1) {
+                return nullptr;
+            } else {
+                ts = posix::to_timespec(timeout * 1ms);
+                return &ts;
+            }
+        }();
+        constexpr size_t batch_size = 128;
+        io_event batch[batch_size];
+        bool did_work = false;
+        int r;
+        do {
+            r = io_getevents(_r->_io_context, 0, batch_size, batch, tsp);
+            assert(r != -1);
+            for (unsigned i = 0; i != unsigned(r); ++i) {
+                did_work = true;
+                auto& event = batch[i];
+                auto iocb = get_iocb(event);
+                if (iocb == &_signalfd_iocb) {
+                    _signalfd_in_polling_io = false;
+                    // service_preempting_io() will pick it up
+                    continue;
+                }
+                auto* pr = reinterpret_cast<promise<>*>(uintptr_t(event.data));
+                pr->set_value();
+                delete iocb;
+            }
+            // For the next iteration, don't use a timeout, since we may have waited already
+            ts = {};
+            tsp = &ts;
+        } while (r == batch_size);
+        return did_work;
+    }
+    bool reap_ready_events() {
+        return await_events(0);
+    }
+public:
+    explicit reactor_backend_aio(reactor* r) : _r(r) {
+        auto ret = io_setup(2, &_preempting_io);
+        throw_system_error_on(ret == -1);
+        auto undo = defer([&] { io_destroy(_preempting_io); });
+        ret = io_setup(2000, &_polling_io);
+        throw_system_error_on(ret == -1);
+        undo.cancel();
+        _task_quota_timer_iocb = make_poll_iocb(_r->_task_quota_timer.get(), POLLIN);
+        _signalfd_iocb = make_poll_iocb(_signalfd.get(), POLLIN);
+    }
+    virtual ~reactor_backend_aio() {
+        io_destroy(_preempting_io);
+    }
+    virtual bool wait_and_process(int timeout, const sigset_t* active_sigmask) override {
+        if (service_preempting_io()) {
+            // We dequeued pending signals, don't block
+            timeout = 0;
+        }
+        replenish(_polling_io, _signalfd_iocb, _signalfd_in_polling_io);
+        bool did_work = false;
+        did_work |= reap_ready_events();
+        if (!did_work) {
+            await_events(timeout);
+            service_preempting_io(); // clear task quota timer
+            did_work = true;
+        }
+        replenish(_preempting_io, _signalfd_iocb, _signalfd_in_preempting_io);
+        replenish(_preempting_io, _task_quota_timer_iocb, _task_quota_timer_in_preempting_io);
+        return did_work;
+    }
+    future<> poll(pollable_fd_state& fd, promise<> pollable_fd_state::*promise_field, int events) {
+        try {
+            auto iocb = new ::iocb; // FIXME: merge with pollable_fd_state
+            *iocb = make_poll_iocb(fd.fd.get(), events);
+            fd.events_requested = events;
+            fd.events_rw = events == (POLLIN|POLLOUT);
+            auto pr = &(fd.*promise_field);
+            *pr = promise<>();
+            set_user_data(*iocb, pr);
+            ::iocb* a[1] = { iocb };
+            int r = io_submit(_r->_io_context, 1, a);
+            throw_system_error_on(r == -1);
+            assert(r == 1);
+            return pr->get_future();
+        } catch (...) {
+            return make_exception_future<>(std::current_exception());
+        }
+    }
+    virtual future<> readable(pollable_fd_state& fd) override {
+        return poll(fd, &pollable_fd_state::pollin, POLLIN);
+    }
+    virtual future<> writeable(pollable_fd_state& fd) override {
+        return poll(fd, &pollable_fd_state::pollout, POLLOUT);
+    }
+    virtual future<> readable_or_writeable(pollable_fd_state& fd) override {
+        return poll(fd, &pollable_fd_state::pollin, POLLIN|POLLOUT);
+    }
+    virtual void forget(pollable_fd_state& fd) override {
+        // ?
+    }
+    virtual void handle_signal(int signo) override {
+        ::sigset_t sigset;
+        ::sigemptyset(&sigset);
+        ::sigaddset(&sigset, signo);
+        _signalfd.update_signalfd(&sigset, SFD_CLOEXEC|SFD_NONBLOCK);
+    }
+    virtual void start_tick() override {
+        // Preempt whenever an event (timer tick or signal) is available on the
+        // _preempting_io ring
+        g_need_preempt = reinterpret_cast<const preemption_monitor*>(_preempting_io + 8);
+        // reactor::request_preemption() will write to reactor::_preemption_monitor, which is now ignored
+    }
+    virtual void stop_tick() override {
+        g_need_preempt = &_r->_preemption_monitor;
+    }
+    virtual void reset_preemption_monitor() override {
+        service_preempting_io();
+    }
+};
 
 reactor_backend_epoll::reactor_backend_epoll(reactor* r)
         : _r(r), _epollfd(file_desc::epoll_create(EPOLL_CLOEXEC)) {
