@@ -628,7 +628,7 @@ struct reactor::task_queue::indirect_compare {
 
 reactor::reactor(unsigned id)
     : _notify_eventfd(file_desc::eventfd(0, EFD_CLOEXEC))
-    , _backend(std::make_unique<reactor_backend_epoll>(this))
+    , _backend(std::make_unique<reactor_backend_aio>(this))
     , _id(id)
 #ifdef HAVE_OSV
     , _timer_thread(
