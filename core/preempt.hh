@@ -30,8 +30,8 @@ struct preemption_monitor {
     // We preempt head head != tail
     // This happens to match the Linux aio completion ring, so we can have the
     // kernel preempt a task by queuing a completion event to an io_context.
-    std::atomic_uint32_t head;
-    std::atomic_uint32_t tail;
+    std::atomic<uint32_t> head;
+    std::atomic<uint32_t> tail;
 };
 
 }
