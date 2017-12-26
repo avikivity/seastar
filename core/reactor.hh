@@ -663,6 +663,7 @@ public:
     };
 private:
     file_desc _notify_eventfd;
+    file_desc _task_quota_timer;
 #ifdef HAVE_OSV
     reactor_backend_osv _backend;
     sched::thread _timer_thread;
@@ -698,7 +699,6 @@ private:
     promise<std::unique_ptr<network_stack>> _network_stack_ready_promise;
     int _return = 0;
     timer_t _steady_clock_timer = {};
-    file_desc _task_quota_timer;
     promise<> _start_promise;
     semaphore _cpu_started;
     internal::preemption_monitor _preemption_monitor{};
