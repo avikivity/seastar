@@ -200,6 +200,7 @@ class reactor_backend_aio : public reactor_backend {
     // signals), the other for non-preempting events (fd poll).
     ::aio_context_t _preempting_io{}; // Used for the timer tick and signals
     ::aio_context_t _polling_io{}; // FIXME: unify with disk aio_context
+    ::sigset_t _sigmask;
     file_desc _signalfd = make_signalfd();
     ::iocb _task_quota_timer_iocb;
     ::iocb _signalfd_iocb;
@@ -301,6 +302,7 @@ public:
         undo.cancel();
         _task_quota_timer_iocb = make_poll_iocb(_r->_task_quota_timer.get(), POLLIN);
         _signalfd_iocb = make_poll_iocb(_signalfd.get(), POLLIN);
+        ::sigemptyset(&_sigmask);
     }
     virtual ~reactor_backend_aio() {
         io_destroy(_preempting_io);
@@ -353,10 +355,8 @@ public:
         // ?
     }
     virtual void handle_signal(int signo) override {
-        ::sigset_t sigset;
-        ::sigemptyset(&sigset);
-        ::sigaddset(&sigset, signo);
-        _signalfd.update_signalfd(&sigset, SFD_CLOEXEC|SFD_NONBLOCK);
+        ::sigaddset(&_sigmask, signo);
+        _signalfd.update_signalfd(&_sigmask, SFD_CLOEXEC|SFD_NONBLOCK);
     }
     virtual void start_tick() override {
         // Preempt whenever an event (timer tick or signal) is available on the
