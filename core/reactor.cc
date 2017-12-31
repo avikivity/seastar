@@ -244,7 +244,7 @@ private:
         }
         return did_work;
     }
-    void replenish(::aio_context_t context, ::iocb iocb, bool& in) {
+    void replenish(::aio_context_t context, ::iocb& iocb, bool& in) {
         if (!in) {
             ::iocb* a[1] = { &iocb };
             io_submit(context, 1, a);
