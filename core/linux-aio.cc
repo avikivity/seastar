@@ -46,7 +46,8 @@ static linux_aio_ring* to_ring(::aio_context_t io_context) {
 }
 
 static bool usable(const linux_aio_ring* ring) {
-    return ring->magic == 0xa10a10a1 && ring->incompat_features == 0;
+    return false;
+    //return ring->magic == 0xa10a10a1 && ring->incompat_features == 0;
 }
 
 int io_setup(int nr_events, ::aio_context_t* io_context) {

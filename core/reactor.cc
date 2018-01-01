@@ -143,6 +143,7 @@ lowres_clock_impl::lowres_clock_impl() {
 }
 
 void lowres_clock_impl::update() {
+    print("lowres_clock::update\n");
     auto const steady_count =
             std::chrono::duration_cast<steady_duration>(base_steady_clock::now().time_since_epoch()).count();
 
@@ -216,30 +217,40 @@ private:
     void process_signals() {
         signalfd_siginfo si;
         auto ret = _signalfd.read(&si, sizeof(si));
+        print("signalfd: read %d\n", ret.value_or(0));
         if (!ret) {
             // Since we await _signalfd from two aio contexts, we can
             // get false positives
             return;
         }
+        print("signalfd: signal received %d\n", si.ssi_signo);
         _r->signal_received(si.ssi_signo);
     }
     void process_task_quota_timer() {
+        print("process task quota timer\n");
         uint64_t v;
-        _r->_task_quota_timer.read(&v, 8);
+        auto r = _r->_task_quota_timer.read(&v, 8);
+        print("task quota timer read: %d\n", r.value_or(0));
     }
     bool service_preempting_io() {
+        print("service_preempting_io\n");
         ::io_event a[2];
         auto r = io_getevents(_preempting_io, 0, 2, a, 0);
+        print("service_preempting_io: r %d\n", r);
         assert(r != -1);
         bool did_work = false;
         for (unsigned i = 0; i != unsigned(r); ++i) {
             if (get_iocb(a[i]) == &_task_quota_timer_iocb) {
+                print("service_preempting_io: timer\n");
                 _task_quota_timer_in_preempting_io = false;
                 process_task_quota_timer();
             } else if (get_iocb(a[i]) == &_signalfd_iocb) {
+                print("service_preempting_io: signal\n");
                 _signalfd_in_preempting_io = false;
                 process_signals();
                 did_work = true;
+            } else {
+                print("funny iocb %p\n", (void*)get_iocb(a[i]));
             }
         }
         return did_work;
@@ -247,7 +258,9 @@ private:
     void replenish(::aio_context_t context, ::iocb& iocb, bool& in) {
         if (!in) {
             ::iocb* a[1] = { &iocb };
-            io_submit(context, 1, a);
+            print("replenish: resubmitting\n");
+            auto r = io_submit(context, 1, a);
+            print("replenish: r = %d\n", r);
             in = true;
         }
     }
@@ -268,17 +281,21 @@ private:
         bool did_work = false;
         int r;
         do {
-            r = io_getevents(_r->_io_context, 0, batch_size, batch, tsp);
+            print("await_events: waiting\n");
+            r = io_getevents(_polling_io, 1, batch_size, batch, tsp);
+            print("await_events: r %d\n", r);
             assert(r != -1);
             for (unsigned i = 0; i != unsigned(r); ++i) {
                 did_work = true;
                 auto& event = batch[i];
                 auto iocb = get_iocb(event);
                 if (iocb == &_signalfd_iocb) {
+                    print("await: signalfd\n");
                     _signalfd_in_polling_io = false;
                     // service_preempting_io() will pick it up
                     continue;
                 }
+                print("await: iocb %p\n", reinterpret_cast<void*>(iocb));
                 auto* pr = reinterpret_cast<promise<>*>(uintptr_t(event.data));
                 pr->set_value();
                 delete iocb;
@@ -288,9 +305,6 @@ private:
             tsp = &ts;
         } while (r == batch_size);
         return did_work;
-    }
-    bool reap_ready_events() {
-        return await_events(0);
     }
 public:
     explicit reactor_backend_aio(reactor* r) : _r(r) {
@@ -308,25 +322,26 @@ public:
         io_destroy(_preempting_io);
     }
     virtual bool wait_and_process(int timeout, const sigset_t* active_sigmask) override {
-        if (service_preempting_io()) {
+        print("wait_and_process: entry timeout %d\n", timeout);
+        bool did_work = service_preempting_io();
+        if (did_work) {
             // We dequeued pending signals, don't block
             timeout = 0;
+            print("wait_and_process: preempted, clearing timeout\n");
         }
         replenish(_polling_io, _signalfd_iocb, _signalfd_in_polling_io);
-        bool did_work = false;
-        did_work |= reap_ready_events();
-        if (!did_work) {
-            await_events(timeout);
-            service_preempting_io(); // clear task quota timer
-            did_work = true;
-        }
+        did_work |= await_events(timeout);
+        print("wait_and_process: ready events returned %d\n", did_work);
+        did_work |= service_preempting_io(); // clear task quota timer
         replenish(_preempting_io, _signalfd_iocb, _signalfd_in_preempting_io);
         replenish(_preempting_io, _task_quota_timer_iocb, _task_quota_timer_in_preempting_io);
+        print("wait_and_process: returning %d\n", did_work);
         return did_work;
     }
     future<> poll(pollable_fd_state& fd, promise<> pollable_fd_state::*promise_field, int events) {
         try {
             auto iocb = new ::iocb; // FIXME: merge with pollable_fd_state
+            print("poll: fd %d iocb %p event %d\n", fd.fd.get(), (void*)iocb, events);
             *iocb = make_poll_iocb(fd.fd.get(), events);
             fd.events_requested = events;
             fd.events_rw = events == (POLLIN|POLLOUT);
@@ -334,7 +349,7 @@ public:
             *pr = promise<>();
             set_user_data(*iocb, pr);
             ::iocb* a[1] = { iocb };
-            int r = io_submit(_r->_io_context, 1, a);
+            int r = io_submit(_polling_io, 1, a);
             throw_system_error_on(r == -1);
             assert(r == 1);
             return pr->get_future();
@@ -355,6 +370,7 @@ public:
         // ?
     }
     virtual void handle_signal(int signo) override {
+        print("handle_signal %d\n", signo);
         ::sigaddset(&_sigmask, signo);
         _signalfd.update_signalfd(&_sigmask, SFD_CLOEXEC|SFD_NONBLOCK);
     }
@@ -2731,7 +2747,7 @@ reactor::do_expire_lowres_timers() {
         return false;
     }
     auto now = lowres_clock::now();
-    if (now > _lowres_next_timeout) {
+    if (now >= _lowres_next_timeout) {
         complete_timers(_lowres_timers, _expired_lowres_timers, [this] {
             if (!_lowres_timers.empty()) {
                 _lowres_next_timeout = _lowres_timers.get_next_timeout();
@@ -2784,6 +2800,8 @@ public:
         return poll(); // actually performs work, but triggers no user continuations, so okay
     }
     virtual bool try_enter_interrupt_mode() override {
+        print("io_poller::try_enter_interrupt_mode: %d\n", _r._io_context_available.current() == reactor::max_aio
+                || _r._aio_eventfd);
         // aio cannot generate events if there are no inflight aios;
         // but if we enabled _aio_eventfd, we can always enter
         return _r._io_context_available.current() == reactor::max_aio
@@ -2814,10 +2832,12 @@ public:
         sigfillset(&block_all);
         ::pthread_sigmask(SIG_SETMASK, &block_all, &_r._active_sigmask);
         if (poll()) {
+            print("signal_poller::try_enter_interrupt_mode: 0\n");
             // raced already, and lost
             exit_interrupt_mode();
             return false;
         }
+        print("signal_poller::try_enter_interrupt_mode: 1\n");
         return true;
     }
     virtual void exit_interrupt_mode() override final {
@@ -2903,15 +2923,19 @@ public:
         auto next = _r._lowres_next_timeout;
         if (next == lowres_clock::time_point()) {
             // no pending timers
+            print("lowres_timer::try_enter_interrupt_mode: 1\n");
             return true;
         }
         auto now = lowres_clock::now();
+        print("lowres_timer: now %d next %d\n", now.time_since_epoch().count(), next.time_since_epoch().count());
         if (next <= now) {
             // whoops, go back
+            print("lowres_timer::try_enter_interrupt_mode: 0\n");
             return false;
         }
         _nearest_wakeup.arm(next - now);
         _armed = true;
+        print("lowres_timer::try_enter_interrupt_mode: 1\n");
         return true;
     }
     virtual void exit_interrupt_mode() override final {
@@ -2939,13 +2963,16 @@ public:
         bool barrier_done = try_systemwide_memory_barrier();
         if (!barrier_done) {
             _r._sleeping.store(false, std::memory_order_relaxed);
+            print("smp::try_enter_interrupt_mode: 0\n");
             return false;
         }
         if (poll()) {
             // raced
             _r._sleeping.store(false, std::memory_order_relaxed);
+            print("smp::try_enter_interrupt_mode: 0\n");
             return false;
         }
+        print("smp::try_enter_interrupt_mode: 1\n");
         return true;
     }
     virtual void exit_interrupt_mode() override final {
@@ -2987,8 +3014,10 @@ public:
         if (poll()) {
             // raced
             _r._thread_pool.exit_interrupt_mode();
+            print("syscall::try_enter_interrupt_mode: 0\n");
             return false;
         }
+        print("syscall::try_enter_interrupt_mode: 1\n");
         return true;
     }
     virtual void exit_interrupt_mode() override final {
@@ -3182,6 +3211,7 @@ int reactor::run() {
     poller syscall_poller(std::make_unique<syscall_pollfn>(*this));
 #ifndef HAVE_OSV
     _signals.handle_signal(alarm_signal(), [this] {
+        print("alarm signal, expiring timers\n");
         complete_timers(_timers, _expired_timers, [this] {
             if (!_timers.empty()) {
                 enable_timer(_timers.get_next_timeout());
@@ -3227,6 +3257,7 @@ int reactor::run() {
     bool idle = false;
 
     std::function<bool()> check_for_work = [this] () {
+        print("check_for_work\n");
         return poll_once() || have_more_tasks() || seastar::thread::try_run_one_yielded_thread();
     };
     std::function<bool()> pure_check_for_work = [this] () {
