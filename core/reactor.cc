@@ -286,6 +286,12 @@ wrap_syscall(int result, const Extra& extra) {
     return {result, errno, extra};
 }
 
+inline int alarm_signal() {
+    // We don't want to use SIGALRM, because the boost unit test library
+    // also plays with it.
+    return SIGRTMIN;
+}
+
 reactor_backend_epoll::reactor_backend_epoll(reactor* r)
         : _r(r), _epollfd(file_desc::epoll_create(EPOLL_CLOEXEC)) {
     ::epoll_event event;
@@ -293,6 +299,17 @@ reactor_backend_epoll::reactor_backend_epoll(reactor* r)
     event.data.ptr = nullptr;
     auto ret = ::epoll_ctl(_epollfd.get(), EPOLL_CTL_ADD, _r->_notify_eventfd.get(), &event);
     throw_system_error_on(ret == -1);
+
+    struct sigevent sev;
+    sev.sigev_notify = SIGEV_THREAD_ID;
+    sev._sigev_un._tid = syscall(SYS_gettid);
+    sev.sigev_signo = alarm_signal();
+    ret = timer_create(CLOCK_MONOTONIC, &sev, &_steady_clock_timer);
+    assert(ret >= 0);
+}
+
+reactor_backend_epoll::~reactor_backend_epoll() {
+    timer_delete(_steady_clock_timer);
 }
 
 void reactor_backend_epoll::start_tick() {
@@ -309,6 +326,17 @@ void reactor_backend_epoll::start_tick() {
 void reactor_backend_epoll::stop_tick() {
     _r->_dying.store(true, std::memory_order_relaxed);
     _task_quota_timer_thread.join();
+}
+
+void reactor_backend_epoll::arm_highres_timer(const ::itimerspec& its) {
+    auto ret = timer_settime(_steady_clock_timer, TIMER_ABSTIME, &its, NULL);
+    throw_system_error_on(ret == -1);
+    if (!_timer_enabled) {
+        _timer_enabled = true;
+        _r->_signals.handle_signal(alarm_signal(), [r = _r] {
+            r->service_highres_timer();
+        });
+    }
 }
 
 void reactor::signal_received(int signo) {
@@ -451,12 +479,6 @@ static void print_with_backtrace(const char* cause) noexcept {
     print_with_backtrace(buf);
 }
 
-inline int alarm_signal() {
-    // We don't want to use SIGALRM, because the boost unit test library
-    // also plays with it.
-    return SIGRTMIN;
-}
-
 inline int block_notifier_signal() {
     return SIGRTMIN + 1;
 }
@@ -575,12 +597,6 @@ reactor::reactor(unsigned id)
     sigaddset(&mask, alarm_signal());
     r = ::pthread_sigmask(SIG_BLOCK, &mask, NULL);
     assert(r == 0);
-    struct sigevent sev;
-    sev.sigev_notify = SIGEV_THREAD_ID;
-    sev._sigev_un._tid = syscall(SYS_gettid);
-    sev.sigev_signo = alarm_signal();
-    r = timer_create(CLOCK_MONOTONIC, &sev, &_steady_clock_timer);
-    assert(r >= 0);
     sigemptyset(&mask);
     sigaddset(&mask, block_notifier_signal());
     r = ::pthread_sigmask(SIG_UNBLOCK, &mask, NULL);
@@ -601,7 +617,6 @@ reactor::~reactor() {
     assert(r == 0);
 
     _backend.stop_tick();
-    timer_delete(_steady_clock_timer);
     auto eraser = [](auto& list) {
         while (!list.empty()) {
             auto& timer = *list.begin();
@@ -2405,8 +2420,7 @@ void reactor::enable_timer(steady_clock_type::time_point when)
     itimerspec its;
     its.it_interval = {};
     its.it_value = to_timespec(when);
-    auto ret = timer_settime(_steady_clock_timer, TIMER_ABSTIME, &its, NULL);
-    throw_system_error_on(ret == -1);
+    _backend.arm_highres_timer(its);
 #else
     using ns = std::chrono::nanoseconds;
     WITH_LOCK(_timer_mutex) {
@@ -3071,6 +3085,14 @@ reactor::activate(task_queue& tq) {
     _activating_task_queues.push_back(&tq);
 }
 
+void reactor::service_highres_timer() {
+    complete_timers(_timers, _expired_timers, [this] {
+        if (!_timers.empty()) {
+            enable_timer(_timers.get_next_timeout());
+        }
+    });
+}
+
 int reactor::run() {
     auto signal_stack = install_signal_handler_stack();
 
@@ -3121,15 +3143,6 @@ int reactor::run() {
     });
 
     poller syscall_poller(std::make_unique<syscall_pollfn>(*this));
-#ifndef HAVE_OSV
-    _signals.handle_signal(alarm_signal(), [this] {
-        complete_timers(_timers, _expired_timers, [this] {
-            if (!_timers.empty()) {
-                enable_timer(_timers.get_next_timeout());
-            }
-        });
-    });
-#endif
 
     poller drain_cross_cpu_freelist(std::make_unique<drain_cross_cpu_freelist_pollfn>());
 
