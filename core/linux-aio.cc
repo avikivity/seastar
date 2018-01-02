@@ -70,7 +70,7 @@ int io_cancel(aio_context_t io_context, iocb* iocb, io_event* result) {
     return ::syscall(SYS_io_cancel, io_context, iocb, result);
 }
 
-int io_getevents(aio_context_t io_context, long min_nr, long nr, io_event* events, const ::timespec* timeout) {
+static int try_reap_events(aio_context_t io_context, long min_nr, long nr, io_event* events, const ::timespec* timeout) {
     auto ring = to_ring(io_context);
     if (usable(ring)) {
         // Try to complete in userspace, if enough available events,
@@ -115,7 +115,26 @@ int io_getevents(aio_context_t io_context, long min_nr, long nr, io_event* event
             return now;
         }
     }
+    return -1;
+}
+
+int io_getevents(aio_context_t io_context, long min_nr, long nr, io_event* events, const ::timespec* timeout) {
+    auto r = try_reap_events(io_context, min_nr, nr, events, timeout);
+    if (r >= 0) {
+        return r;
+    }
     return ::syscall(SYS_io_getevents, io_context, min_nr, nr, events, timeout);
+}
+
+int io_pgetevents(aio_context_t io_context, long min_nr, long nr, io_event* events, const ::timespec* timeout, const sigset_t* sigmask) {
+    auto r = try_reap_events(io_context, min_nr, nr, events, timeout);
+    if (r >= 0) {
+        return r;
+    }
+    aio_sigset as;
+    as.sigmask = const_cast<sigset_t*>(sigmask);
+    as.sigsetsize = 8;  // Can't use sizeof(*sigmask) because user and kernel sigset_t are inconsistent
+    return ::syscall(333 /* FIXME: from header */, io_context, min_nr, nr, events, timeout, &as);
 }
 
 }
