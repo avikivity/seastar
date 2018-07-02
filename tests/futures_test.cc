@@ -284,12 +284,11 @@ SEASTAR_TEST_CASE(test_bare_value_can_be_returned_from_callback) {
 SEASTAR_TEST_CASE(test_when_all_iterator_range) {
     std::vector<future<size_t>> futures;
     for (size_t i = 0; i != 1000000; ++i) {
-        // .then() usually returns a ready future, but sometimes it
-        // doesn't, so call it a million times.  This exercises both
+        // Call later() occasionally to exercise both
         // available and unavailable paths in when_all().
-        futures.push_back(make_ready_future<>().then([i] { return i; }));
+        futures.push_back((i % 10000 == 0 ? later() : make_ready_future<>()).then([i] { return i; }));
     }
-    // Verify the above statement is correct
+    // Verify that we're indeed checking both paths
     BOOST_REQUIRE(!std::all_of(futures.begin(), futures.end(),
             [] (auto& f) { return f.available(); }));
     auto p = make_shared(std::move(futures));
@@ -497,18 +496,6 @@ SEASTAR_TEST_CASE(test_parallel_for_each_waits_for_all_fibers_even_if_one_of_the
 }
 
 #ifndef SEASTAR_SHUFFLE_TASK_QUEUE
-SEASTAR_TEST_CASE(test_high_priority_task_runs_before_ready_continuations) {
-    return now().then([] {
-        auto flag = make_lw_shared<bool>(false);
-        engine().add_high_priority_task(make_task([flag] {
-            *flag = true;
-        }));
-        make_ready_future().then([flag] {
-            BOOST_REQUIRE(*flag);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_high_priority_task_runs_in_the_middle_of_loops) {
     auto counter = make_lw_shared<int>(0);
     auto flag = make_lw_shared<bool>(false);
