@@ -36,4 +36,17 @@ inline bool need_preempt() {
 #endif
 }
 
+// A variant of \ref need_preempt() that's only true in debug mode. This
+// is used to glue two short continuations: in release mode we assume they
+// are short and that preemption checks elsewhere will detect the need to
+// preempt, and in debug mode we always preempt in order to detect object
+// lifetime problems caused by breaking continuations into tasks.
+inline bool debug_need_preempt() {
+#ifndef SEASTAR_DEBUG
+    return false;
+#else
+    return true;
+#endif
+}
+
 }

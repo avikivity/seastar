@@ -945,7 +945,7 @@ public:
     Result
     then(Func&& func) noexcept {
         using futurator = futurize<std::result_of_t<Func(T&&...)>>;
-        if (available() && !need_preempt()) {
+        if (available() && !debug_need_preempt()) {
             if (failed()) {
                 return futurator::make_exception_future(get_available_state().get_exception());
             } else {
@@ -993,7 +993,7 @@ public:
     Result
     then_wrapped(Func&& func) noexcept {
         using futurator = futurize<std::result_of_t<Func(future)>>;
-        if (available() && !need_preempt()) {
+        if (available() && !debug_need_preempt()) {
             return futurator::apply(std::forward<Func>(func), future(get_available_state()));
         }
         typename futurator::promise_type pr;
