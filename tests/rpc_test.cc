@@ -451,3 +451,44 @@ SEASTAR_TEST_CASE(test_rpc_scheduling) {
         });
     });
 }
+
+SEASTAR_THREAD_TEST_CASE(test_rpc_scheduling_connection_based) {
+    auto sg1 = create_scheduling_group("sg1", 100).get0();
+    auto sg2 = create_scheduling_group("sg2", 100).get0();
+    rpc::resource_limits limits;
+    limits.isolate_connection = [sg1, sg2] (sstring cookie) {
+        auto sg = current_scheduling_group();
+        if (cookie == "sg1") {
+            sg = sg1;
+        } else if (cookie == "sg2") {
+            sg = sg2;
+        }
+        rpc::isolation_config cfg;
+        cfg.sched_group = sg;
+        return cfg;
+    };
+    with_rpc_env(limits, {}, true, false, [sg1, sg2] (test_rpc_proto& proto, test_rpc_proto::server& s, make_socket_fn make_socket) {
+        return async([&proto, make_socket, sg1, sg2] {
+            rpc::client_options co1;
+            co1.isolation_cookie = "sg1";
+            test_rpc_proto::client c1(proto, co1, make_socket(), ipv4_addr());
+            rpc::client_options co2;
+            co2.isolation_cookie = "sg2";
+            test_rpc_proto::client c2(proto, co2, make_socket(), ipv4_addr());
+            auto call = proto.register_handler(1, [sg1, sg2] (int which) mutable {
+                scheduling_group expected;
+                if (which == 1) {
+                    expected = sg1;
+                } else if (which == 2) {
+                    expected = sg2;
+                }
+                BOOST_REQUIRE(current_scheduling_group() == expected);
+                return make_ready_future<>();
+            });
+            call(c1, 1).get();
+            call(c2, 2).get();
+            c1.stop().get();
+            c2.stop().get();
+        });
+    }).get();
+}
