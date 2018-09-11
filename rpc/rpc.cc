@@ -841,7 +841,8 @@ namespace rpc {
 
   future<> server::connection::process() {
       return negotiate_protocol(_read_buf).then([this] () mutable {
-        return with_scheduling_group(_isolation_config.sched_group, [this] {
+        auto sg = _isolation_config ? _isolation_config->sched_group : current_scheduling_group();
+        return with_scheduling_group(sg, [this] {
           send_loop();
           return do_until([this] { return _read_buf.eof() || _error; }, [this] () mutable {
               if (is_stream()) {
@@ -858,12 +859,9 @@ namespace rpc {
                       }
                       auto h = _server._proto->get_handler(type);
                       if (h) {
-                          // If the old method of per-handler scheudling group was selected, honor it
-                          // Otherwise, use per-connection isolation by inheriting the current group
-                          auto sg = current_scheduling_group();
-                          if (h->sg != default_scheduling_group()) {
-                              sg = h->sg;
-                          }
+                          // If the new method of per-connection scheduling group was used, honor it.
+                          // Otherwise, use the old per-handler scheduling group.
+                          auto sg = _isolation_config ? _isolation_config->sched_group : h->sg;
                           return with_scheduling_group(sg, std::ref(h->func), shared_from_this(), timeout, msg_id, std::move(data.value()));
                       } else {
                           return wait_for_resources(28, timeout).then([this, timeout, msg_id, type] (auto permit) {

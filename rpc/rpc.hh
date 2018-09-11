@@ -459,7 +459,7 @@ public:
         server& _server;
         client_info _info;
         connection_id _parent_id = invalid_connection_id;
-        isolation_config _isolation_config;
+        compat::optional<isolation_config> _isolation_config;
     private:
         future<> negotiate_protocol(input_stream<char>& in);
         future<compat::optional<uint64_t>, uint64_t, int64_t, compat::optional<rcv_buf>>
