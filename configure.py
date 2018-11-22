@@ -312,6 +312,7 @@ tests = [
     'tests/unit/alien_test',
     'tests/unit/signal_test',
     'tests/unit/simple_stream_test',
+    'tests/unit/stall_detector_test',
     ] + perf_tests
 
 apps = [
@@ -642,6 +643,7 @@ deps = {
     'tests/unit/alien_test': ['tests/unit/alien_test.cc'] + core,
     'tests/unit/signal_test': ['tests/unit/signal_test.cc'] + core,
     'tests/unit/simple_stream_test': ['tests/unit/simple_stream_test.cc'] + core,
+    'tests/unit/stall_detector_test': ['tests/unit/stall_detector_test.cc'] + core,
 }
 
 boost_tests = [
@@ -666,6 +668,7 @@ boost_tests = [
     'tests/unit/lowres_clock_test',
     'tests/unit/abort_source_test',
     'tests/unit/signal_test',
+    'tests/unit/stall_detector_test',
     ]
 
 for bt in boost_tests:

@@ -58,6 +58,7 @@ boost_tests = [
     'unit/signal_test',
     'unit/simple_stream_test',
     'unit/dns_test',
+    'unit/stall_detector_test',
 ]
 
 other_tests = [
