@@ -1180,6 +1180,7 @@ public:
     }
 
     void update_blocked_reactor_notify_ms(std::chrono::milliseconds ms);
+    std::chrono::milliseconds get_blocked_reactor_notify_ms() const;
 };
 
 template <typename Func> // signature: bool ()
