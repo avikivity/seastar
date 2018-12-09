@@ -1225,7 +1225,10 @@ bool reactor::process_io()
 {
     io_event ev[max_aio];
     struct timespec timeout = {0, 0};
-    auto n = io_getevents(_io_context, 1, max_aio, ev, &timeout);
+    auto n = io_getevents(_io_context, 1, max_aio, ev, &timeout, _force_io_getevents_syscall);
+    if (n == -1 && errno == EINTR) {
+        n = 0;
+    }
     assert(n >= 0);
     unsigned nr_retry = 0;
     for (size_t i = 0; i < size_t(n); ++i) {
