@@ -34,6 +34,7 @@
 #include <seastar/core/function_traits.hh>
 #include <seastar/util/alloc_failure_injector.hh>
 #include <seastar/util/gcc6-concepts.hh>
+#include <seastar/util/noncopyable_function.hh>
 
 namespace seastar {
 
@@ -981,6 +982,7 @@ public:
     Result
     then(Func&& func) noexcept {
         using futurator = futurize<std::result_of_t<Func(T&&...)>>;
+#ifndef SEASTAR_TYPE_ERASE_MORE
         if (available() && !need_preempt()) {
             if (failed()) {
                 return futurator::make_exception_future(get_available_state().get_exception());
@@ -1006,9 +1008,49 @@ public:
             abort();
         }
         return fut;
+#else
+        return then_type_erased(noncopyable_function<Result (T&&...)>([func = std::forward<Func>(func)] (T&&... args) mutable {
+            return futurator::apply(func, std::forward_as_tuple(std::move(args)...));
+        }));
+#endif
     }
 
+private:
 
+#ifdef SEASTAR_TYPE_ERASE_MORE
+    template <typename Result>
+    [[gnu::noinline]]
+    Result then_type_erased(noncopyable_function<Result (T&&... args)> func) noexcept {
+        using futurator = futurize<Result>;
+        if (available() && !need_preempt()) {
+            if (failed()) {
+                return futurator::make_exception_future(get_available_state().get_exception());
+            } else {
+                return futurator::apply(std::move(func), get_available_state().get_value());
+            }
+        }
+        typename futurator::promise_type pr;
+        auto fut = pr.get_future();
+        try {
+            memory::disable_failure_guard dfg;
+            schedule([pr = std::move(pr), func = std::move(func)] (auto&& state) mutable {
+                if (state.failed()) {
+                    pr.set_exception(std::move(state).get_exception());
+                } else {
+                    futurator::apply(std::move(func), std::move(state).get_value()).forward_to(std::move(pr));
+                }
+            });
+        } catch (...) {
+            // catch possible std::bad_alloc in schedule() above
+            // nothing can be done about it, we cannot break future chain by returning
+            // ready future while 'this' future is not ready
+            abort();
+        }
+        return fut;
+    }
+#endif
+
+public:
     /// \brief Schedule a block of code to run when the future is ready, allowing
     ///        for exception handling.
     ///
@@ -1029,6 +1071,7 @@ public:
     Result
     then_wrapped(Func&& func) noexcept {
         using futurator = futurize<std::result_of_t<Func(future)>>;
+#ifndef SEASTAR_TYPE_ERASE_MORE
         if (available() && !need_preempt()) {
             return futurator::apply(std::forward<Func>(func), future(get_available_state()));
         }
@@ -1046,8 +1089,41 @@ public:
             abort();
         }
         return fut;
+#else
+        return then_wrapped_type_erased(noncopyable_function<Result (future)>([func = std::forward<Func>(func)] (future f) mutable {
+            return futurator::apply(std::forward<Func>(func), std::move(f));
+        }));
+#endif
     }
 
+private:
+
+#ifdef SEASTAR_TYPE_ERASE_MORE
+    template <typename Result>
+    [[gnu::noinline]]
+    Result then_wrapped_type_erased(noncopyable_function<Result (future f)> func) noexcept {
+        using futurator = futurize<Result>;
+        if (available() && !need_preempt()) {
+            return futurator::apply(std::move(func), future(get_available_state()));
+        }
+        typename futurator::promise_type pr;
+        auto fut = pr.get_future();
+        try {
+            memory::disable_failure_guard dfg;
+            schedule([pr = std::move(pr), func = std::move(func)] (auto&& state) mutable {
+                futurator::apply(std::move(func), future(std::move(state))).forward_to(std::move(pr));
+            });
+        } catch (...) {
+            // catch possible std::bad_alloc in schedule() above
+            // nothing can be done about it, we cannot break future chain by returning
+            // ready future while 'this' future is not ready
+            abort();
+        }
+        return fut;
+    }
+#endif
+
+public:
     /// \brief Satisfy some \ref promise object with this future as a result.
     ///
     /// Arranges so that when this future is resolve, it will be used to
