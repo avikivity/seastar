@@ -1,4 +1,4 @@
-dist: trusty
+dist: xenial
 # While 'sudo' is not used explicity, setting it to 'required' enforces full virtualization.
 # This is needed as container-based images fail to build Seastar due to insufficient memory.
 sudo: required
