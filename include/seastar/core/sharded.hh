@@ -44,6 +44,12 @@ namespace seastar {
 /// @{
 
 template <typename T>
+class default_sharded_traits;
+
+template <typename T>
+class plain_sharded_traits;
+
+template <typename T, typename Traits = default_sharded_traits<T>>
 class sharded;
 
 /// If sharded service inherits from this class sharded::stop() will wait
@@ -60,7 +66,7 @@ protected:
             _delete_cb();
         }
     }
-    template <typename Service> friend class sharded;
+    template <typename Service, typename Traits> friend class sharded;
 };
 
 
@@ -93,6 +99,26 @@ public:
     }
 };
 
+/// Default traits definition for \ref sharded
+///
+/// This traits class is for classes that provide a Service::stop() method for
+/// orderly shutdown; typically Service::stop() signals and ongoing operation
+/// that a shutdown is in progress, and waits until they acknowledge.
+template <typename Service>
+struct default_sharded_traits {
+    static future<> stop(Service* s) { return s->stop(); }
+};
+
+/// Alternative traits definition for \ref sharded, for plain data types
+///
+/// This traits class is for types that do not provide a Service::stop() method for
+/// orderly shutdown; typically these types do not support asynchronous operation,
+/// or waiting for those asynchronous operations is done by other means.
+template <typename Service>
+struct plain_sharded_traits {
+    static future<> stop(Service* s) { return make_ready_future<>(); }
+};
+
 /// Template helper to distribute a service across all logical cores.
 ///
 /// The \c sharded template manages a sharded service, by creating
@@ -102,7 +128,12 @@ public:
 /// \tparam Service a class to be instantiated on each core.  Must expose
 ///         a \c stop() method that returns a \c future<>, to be called when
 ///         the service is stopped.
-template <typename Service>
+///
+/// \tparam Traits optional adjustments to behavior; See \ref default_sharded
+///         traits for the default (for service classes that are designed to
+///         work with \c sharded) and \ref plain_sharded_traits (for classes
+///         and types that aren't designed to work with \c sharded).
+template <typename Service, typename Traits>
 class sharded {
     struct entry {
         shared_ptr<Service> service;
@@ -456,7 +487,7 @@ private:
     }
 
     void track_deletion(shared_ptr<Service>& s, std::true_type) {
-        s->_delete_cb = std::bind(std::mem_fn(&sharded<Service>::service_deleted), this);
+        s->_delete_cb = std::bind(std::mem_fn(&sharded::service_deleted), this);
     }
 
     template <typename... Args>
@@ -478,19 +509,19 @@ private:
 
 /// @}
 
-template <typename Service>
-sharded<Service>::~sharded() {
+template <typename Service, typename Traits>
+sharded<Service, Traits>::~sharded() {
 	assert(_instances.empty());
 }
 
 namespace internal {
 
-template <typename Service>
+template <typename Service, typename Traits>
 class either_sharded_or_local {
-    sharded<Service>& _sharded;
+    sharded<Service, Traits>& _sharded;
 public:
-    either_sharded_or_local(sharded<Service>& s) : _sharded(s) {}
-    operator sharded<Service>& () { return _sharded; }
+    either_sharded_or_local(sharded<Service, Traits>& s) : _sharded(s) {}
+    operator sharded<Service, Traits>& () { return _sharded; }
     operator Service& () { return _sharded.local(); }
 };
 
@@ -501,16 +532,16 @@ unwrap_sharded_arg(T&& arg) {
     return std::forward<T>(arg);
 }
 
-template <typename Service>
-either_sharded_or_local<Service>
-unwrap_sharded_arg(std::reference_wrapper<sharded<Service>> arg) {
-    return either_sharded_or_local<Service>(arg);
+template <typename Service, typename Traits>
+either_sharded_or_local<Service, Traits>
+unwrap_sharded_arg(std::reference_wrapper<sharded<Service, Traits>> arg) {
+    return either_sharded_or_local<Service, Traits>(arg);
 }
 
 }
 
-template <typename Service>
-sharded<Service>::sharded(sharded&& x) noexcept : _instances(std::move(x._instances)) {
+template <typename Service, typename Traits>
+sharded<Service, Traits>::sharded(sharded&& x) noexcept : _instances(std::move(x._instances)) {
     for (auto&& e : _instances) {
         set_container(e);
     }
@@ -524,10 +555,10 @@ future<> sharded_parallel_for_each(unsigned nr_shards, on_each_shard_func on_eac
 
 }
 
-template <typename Service>
+template <typename Service, typename Traits>
 template <typename... Args>
 future<>
-sharded<Service>::start(Args&&... args) {
+sharded<Service, Traits>::start(Args&&... args) {
     _instances.resize(smp::count);
     return internal::sharded_parallel_for_each(_instances.size(),
         [this, args = std::make_tuple(std::forward<Args>(args)...)] (unsigned c) mutable {
@@ -548,10 +579,10 @@ sharded<Service>::start(Args&&... args) {
     });
 }
 
-template <typename Service>
+template <typename Service, typename Traits>
 template <typename... Args>
 future<>
-sharded<Service>::start_single(Args&&... args) {
+sharded<Service, Traits>::start_single(Args&&... args) {
     assert(_instances.empty());
     _instances.resize(1);
     return smp::submit_to(0, [this, args = std::make_tuple(std::forward<Args>(args)...)] () mutable {
@@ -570,9 +601,9 @@ sharded<Service>::start_single(Args&&... args) {
     });
 }
 
-template <typename Service>
+template <typename Service, typename Traits>
 future<>
-sharded<Service>::stop() {
+sharded<Service, Traits>::stop() {
     return internal::sharded_parallel_for_each(_instances.size(), [this] (unsigned c) mutable {
         return smp::submit_to(c, [this] () mutable {
             auto inst = _instances[engine().cpu_id()].service;
@@ -580,19 +611,19 @@ sharded<Service>::stop() {
                 return make_ready_future<>();
             }
             _instances[engine().cpu_id()].service = nullptr;
-            return inst->stop().then([this, inst] {
+            return Traits::stop(inst.get()).then([this, inst] {
                 return _instances[engine().cpu_id()].freed.get_future();
             });
         });
     }).then([this] {
         _instances.clear();
-        _instances = std::vector<sharded<Service>::entry>();
+        _instances = std::vector<sharded::entry>();
     });
 }
 
-template <typename Service>
+template <typename Service, typename Traits>
 future<>
-sharded<Service>::invoke_on_all(smp_service_group ssg, std::function<future<> (Service&)> func) {
+sharded<Service, Traits>::invoke_on_all(smp_service_group ssg, std::function<future<> (Service&)> func) {
     return internal::sharded_parallel_for_each(_instances.size(), [this, ssg, func = std::move(func)] (unsigned c) {
         return smp::submit_to(c, ssg, [this, func] {
             return func(*get_local_service());
@@ -600,32 +631,32 @@ sharded<Service>::invoke_on_all(smp_service_group ssg, std::function<future<> (S
     });
 }
 
-template <typename Service>
+template <typename Service, typename Traits>
 template <typename... Args>
 inline
 future<>
-sharded<Service>::invoke_on_all(smp_service_group ssg, future<> (Service::*func)(Args...), Args... args) {
+sharded<Service, Traits>::invoke_on_all(smp_service_group ssg, future<> (Service::*func)(Args...), Args... args) {
     return invoke_on_all(ssg, invoke_on_all_func_type([func, args...] (Service& service) mutable {
         return (service.*func)(args...);
     }));
 }
 
-template <typename Service>
+template <typename Service, typename Traits>
 template <typename... Args>
 inline
 future<>
-sharded<Service>::invoke_on_all(smp_service_group ssg, void (Service::*func)(Args...), Args... args) {
+sharded<Service, Traits>::invoke_on_all(smp_service_group ssg, void (Service::*func)(Args...), Args... args) {
     return invoke_on_all(ssg, invoke_on_all_func_type([func, args...] (Service& service) mutable {
         (service.*func)(args...);
         return make_ready_future<>();
     }));
 }
 
-template <typename Service>
+template <typename Service, typename Traits>
 template <typename Func>
 inline
 future<>
-sharded<Service>::invoke_on_all(smp_service_group ssg, Func&& func) {
+sharded<Service, Traits>::invoke_on_all(smp_service_group ssg, Func&& func) {
     static_assert(std::is_same<futurize_t<std::result_of_t<Func(Service&)>>, future<>>::value,
                   "invoke_on_all()'s func must return void or future<>");
     return invoke_on_all(ssg, invoke_on_all_func_type([func] (Service& service) mutable {
@@ -633,11 +664,11 @@ sharded<Service>::invoke_on_all(smp_service_group ssg, Func&& func) {
     }));
 }
 
-template <typename Service>
+template <typename Service, typename Traits>
 template <typename Func>
 inline
 future<>
-sharded<Service>::invoke_on_others(smp_service_group ssg, Func&& func) {
+sharded<Service, Traits>::invoke_on_others(smp_service_group ssg, Func&& func) {
     static_assert(std::is_same<futurize_t<std::result_of_t<Func(Service&)>>, future<>>::value,
                   "invoke_on_others()'s func must return void or future<>");
     return invoke_on_all(ssg, [orig = engine().cpu_id(), func = std::forward<Func>(func)] (auto& s) -> future<> {
@@ -645,26 +676,26 @@ sharded<Service>::invoke_on_others(smp_service_group ssg, Func&& func) {
     });
 }
 
-template <typename Service>
-const Service& sharded<Service>::local() const {
+template <typename Service, typename Traits>
+const Service& sharded<Service, Traits>::local() const {
     assert(local_is_initialized());
     return *_instances[engine().cpu_id()].service;
 }
 
-template <typename Service>
-Service& sharded<Service>::local() {
+template <typename Service, typename Traits>
+Service& sharded<Service, Traits>::local() {
     assert(local_is_initialized());
     return *_instances[engine().cpu_id()].service;
 }
 
-template <typename Service>
-shared_ptr<Service> sharded<Service>::local_shared() {
+template <typename Service, typename Traits>
+shared_ptr<Service> sharded<Service, Traits>::local_shared() {
     assert(local_is_initialized());
     return _instances[engine().cpu_id()].service;
 }
 
-template <typename Service>
-inline bool sharded<Service>::local_is_initialized() const {
+template <typename Service, typename Traits>
+inline bool sharded<Service, Traits>::local_is_initialized() const {
     return _instances.size() > engine().cpu_id() &&
            _instances[engine().cpu_id()].service;
 }
