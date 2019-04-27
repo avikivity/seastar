@@ -76,7 +76,9 @@ endif ()
 if (StdFilesystem_FOUND AND NOT (TARGET StdFilesystem::filesystem))
   add_library (StdFilesystem::filesystem INTERFACE IMPORTED)
 
-  set_target_properties (StdFilesystem::filesystem
-    PROPERTIES
-      INTERFACE_LINK_LIBRARIES ${StdFilesystem_LIBRARIES})
+  if (StdFilesystem_LIBRARIES)
+    set_target_properties (StdFilesystem::filesystem
+      PROPERTIES
+        INTERFACE_LINK_LIBRARIES ${StdFilesystem_LIBRARIES})
+  endif ()
 endif ()
