@@ -296,6 +296,7 @@ private:
     uint64_t _cxx_exceptions = 0;
     uint64_t _abandoned_failed_futures = 0;
     struct task_queue {
+        static constexpr unsigned type_hash_size = 61;
         explicit task_queue(unsigned id, sstring name, float shares);
         int64_t _vruntime = 0;
         float _shares;
@@ -307,8 +308,11 @@ private:
         uint64_t _tasks_processed = 0;
         struct queue_fragment : boost::intrusive::list_base_hook<> {
             constexpr static unsigned max_tasks = 13;
-            unsigned start = 0;
-            unsigned end = 0;
+            uint8_t start = 0;
+            uint8_t end = 0;
+            uint8_t type_hash_index = type_hash_size;
+            queue_fragment() = default;
+            explicit queue_fragment(uint8_t type_hash_index) : type_hash_index(type_hash_index) {}
             task* tasks[max_tasks];
             bool can_push_front() const;
             bool is_full() const { return end == max_tasks; }
@@ -319,6 +323,7 @@ private:
         };
         struct fragmented_queue {
             using fragments_type = boost::intrusive::list<queue_fragment, boost::intrusive::constant_time_size<false>>;
+            queue_fragment* type_hash[type_hash_size + 1] = {};
             unsigned nr_tasks = 0;
             fragments_type fragments;
             void push_front(task* tsk) noexcept;

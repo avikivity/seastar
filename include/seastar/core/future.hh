@@ -592,7 +592,7 @@ public:
     void set_urgent_state(future_state<T...>&& state) noexcept {
         if (_state) {
             *get_state() = std::move(state);
-            make_ready<urgent::yes>();
+            make_ready<urgent::no>();
         }
     }
 
