@@ -310,7 +310,28 @@ private:
         sched_clock::duration _waittime = {};
         sched_clock::duration _starvetime = {};
         uint64_t _tasks_processed = 0;
-        circular_buffer<task*> _q;
+        struct queue_fragment : boost::intrusive::list_base_hook<> {
+            constexpr static unsigned max_tasks = 13;
+            unsigned start = 0;
+            unsigned end = 0;
+            task* tasks[max_tasks];
+            bool can_push_front() const;
+            bool is_full() const { return end == max_tasks; }
+            void push_front(task* tsk) noexcept;
+            void push_back(task* tsk) noexcept {
+                tasks[end++] = tsk;
+            }
+        };
+        struct fragmented_queue {
+            using fragments_type = boost::intrusive::list<queue_fragment, boost::intrusive::constant_time_size<false>>;
+            unsigned nr_tasks = 0;
+            fragments_type fragments;
+            void push_front(task* tsk) noexcept;
+            void push_back(task* tsk) noexcept;
+            bool empty() const { return fragments.empty(); }
+            unsigned size() const { return nr_tasks; }
+        };
+        fragmented_queue _q;
         sstring _name;
         int64_t to_vruntime(sched_clock::duration runtime) const;
         void set_shares(float shares) noexcept;
@@ -566,7 +587,7 @@ public:
         auto sg = t->group();
         auto* q = _task_queues[sg._id].get();
         bool was_empty = q->_q.empty();
-        q->_q.push_back(std::move(t));
+        q->_q.push_back(t);
 #ifdef SEASTAR_SHUFFLE_TASK_QUEUE
         shuffle(q->_q.back(), *q);
 #endif
@@ -579,7 +600,7 @@ public:
         auto sg = t->group();
         auto* q = _task_queues[sg._id].get();
         bool was_empty = q->_q.empty();
-        q->_q.push_front(std::move(t));
+        q->_q.push_front(t);
 #ifdef SEASTAR_SHUFFLE_TASK_QUEUE
         shuffle(q->_q.front(), *q);
 #endif
