@@ -959,6 +959,38 @@ reactor::task_queue::task_queue(task_queue_group* parent, unsigned id, sstring n
     rename(name, shortname);
 }
 
+bool reactor::task_queue::queue_fragment::can_push_front() const {
+    return start != 0;
+    //return end - start != max_tasks;
+}
+
+void reactor::task_queue::queue_fragment::push_front(task* tsk) noexcept {
+    if (end == 0) {
+        start = end = 1;
+    }
+    tasks[--start] = tsk;
+}
+
+void reactor::task_queue::fragmented_queue::push_back(task* tsk) noexcept {
+    if (fragments.empty() || fragments.back().is_full()) {
+        // Note: we can't survive allocation failure here
+        // Note: the fragments list takes ownership of the new queue_fragment
+        fragments.push_back(*new queue_fragment);
+    }
+    fragments.back().push_back(tsk);
+    ++nr_tasks;
+}
+
+void reactor::task_queue::fragmented_queue::push_front(task* tsk) noexcept {
+    if (fragments.empty() || !fragments.front().can_push_front()) {
+        // Note: we can't survive allocation failure here
+        // Note: the fragments list takes ownership of the new queue_fragment
+        fragments.push_front(*new queue_fragment);
+    }
+    fragments.front().push_front(tsk);
+    ++nr_tasks;
+}
+
 void
 reactor::task_queue::register_stats() {
     seastar::metrics::metric_groups new_metrics;
@@ -2616,6 +2648,8 @@ void reactor::register_metrics() {
 }
 
 seastar::internal::log_buf::inserter_iterator do_dump_task_queue(seastar::internal::log_buf::inserter_iterator it, const reactor::task_queue& tq) {
+#if 0
+    // FIXME: fix
     memory::scoped_critical_alloc_section _;
     std::unordered_map<const char*, unsigned> infos;
     for (const auto& tp : tq._q) {
@@ -2628,6 +2662,9 @@ seastar::internal::log_buf::inserter_iterator do_dump_task_queue(seastar::intern
         it = fmt::format_to(it, " {}: {}\n", ti.second, ti.first);
     }
     return it;
+#else
+    return it;
+#endif
 }
 
 bool reactor::task_queue::run_tasks() {
@@ -2635,9 +2672,13 @@ bool reactor::task_queue::run_tasks() {
 
     // Make sure new tasks will inherit our scheduling group
     *internal::current_scheduling_group_ptr() = scheduling_group(_id);
-    while (!_q.empty()) {
-        auto tsk = _q.front();
-        _q.pop_front();
+    auto& tasks = _q;
+    while (!tasks.empty()) {
+      auto frag = &tasks.fragments.front();
+      // Note: we have to reload frag->start, because queue_fragment::push_front() can update it.
+      while (frag->start < frag->end) {
+        auto tsk = frag->tasks[frag->start ++];
+        --tasks.nr_tasks;
         STAP_PROBE(seastar, reactor_run_tasks_single_start);
         internal::task_histogram_add_task(*tsk);
         r._current_task = tsk;
@@ -2648,7 +2689,12 @@ bool reactor::task_queue::run_tasks() {
         ++r._global_tasks_processed;
         // check at end of loop, to allow at least one task to run
         if (internal::scheduler_need_preempt()) {
-            if (_q.size() <= r._cfg.max_task_backlog) {
+            if (tasks.size() <= r._cfg.max_task_backlog) {
+                if (frag->start == frag->end) {
+                    tasks.fragments.erase(tasks.fragments.iterator_to(*frag));
+                    delete frag;
+                    frag = nullptr;
+                }
                 break;
             } else {
                 // While need_preempt() is set, task execution is inefficient due to
@@ -2666,6 +2712,14 @@ bool reactor::task_queue::run_tasks() {
                 }
             }
         }
+      }
+      if (frag && frag->start == frag->end) {
+          tasks.fragments.erase(tasks.fragments.iterator_to(*frag));
+          delete frag;
+      }
+      if (!frag) {
+          break;
+      }
     }
 
     return !_q.empty();
@@ -2673,16 +2727,21 @@ bool reactor::task_queue::run_tasks() {
 
 namespace {
 
+#if 0
 #ifdef SEASTAR_SHUFFLE_TASK_QUEUE
-void shuffle(task*& t, circular_buffer<task*>& q) {
+void shuffle(reactor::task_queue::fragmented_queue& q) {
+#if 0
+    // FIXME: how to shuffle a fragmented queue?
     static thread_local std::mt19937 gen = std::mt19937(std::default_random_engine()());
     std::uniform_int_distribution<size_t> tasks_dist{0, q.size() - 1};
     auto& to_swap = q[tasks_dist(gen)];
     std::swap(to_swap, t);
+#endif
 }
 #else
-void shuffle(task*&, circular_buffer<task*>&) {
+void shuffle(reactor::task_queue::fragmented_queue&) {
 }
+#endif
 #endif
 
 }
@@ -3077,7 +3136,10 @@ void reactor::add_task(task* t) noexcept {
     auto* q = _task_queues[sg._id].get();
     bool was_empty = q->_q.empty();
     q->_q.push_back(std::move(t));
-    shuffle(q->_q.back(), q->_q);
+#if 0
+    // FIXME: broken
+    shuffle(q->_q);
+#endif
     if (was_empty) {
         q->wakeup();
     }
@@ -3089,7 +3151,10 @@ void reactor::add_urgent_task(task* t) noexcept {
     auto* q = _task_queues[sg._id].get();
     bool was_empty = q->_q.empty();
     q->_q.push_front(std::move(t));
-    shuffle(q->_q.front(), q->_q);
+#if 0
+    // FIXME: broken
+    shuffle(q->_q);
+#endif
     if (was_empty) {
         q->wakeup();
     }
