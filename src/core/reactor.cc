@@ -762,6 +762,40 @@ static decltype(auto) install_signal_handler_stack() {
     });
 }
 
+bool reactor::task_queue::queue_fragment::can_push_front() const {
+    return start != 0 || !is_full();
+}
+
+void reactor::task_queue::queue_fragment::push_front(task* tsk) noexcept {
+    if (start != 0) {
+        --start;
+    } else {
+        std::copy_backward(tasks + start, tasks + end, tasks + start + 1);
+        ++end;
+    }
+    tasks[start] = tsk;
+}
+
+void reactor::task_queue::fragmented_queue::push_back(task* tsk) noexcept {
+    if (fragments.empty() || fragments.back().is_full()) {
+        // Note: we can't survive allocation failure here
+        // Note: the fragments list takes ownership of the new queue_fragment
+        fragments.push_back(*new queue_fragment);
+    }
+    fragments.back().push_back(tsk);
+    ++nr_tasks;
+}
+
+void reactor::task_queue::fragmented_queue::push_front(task* tsk) noexcept {
+    if (fragments.empty() || fragments.front().can_push_front()) {
+        // Note: we can't survive allocation failure here
+        // Note: the fragments list takes ownership of the new queue_fragment
+        fragments.push_front(*new queue_fragment);
+    }
+    fragments.front().push_front(tsk);
+    ++nr_tasks;
+}
+
 reactor::task_queue::task_queue(unsigned id, sstring name, float shares)
         : _shares(std::max(shares, 1.0f))
         , _reciprocal_shares_times_2_power_32((uint64_t(1) << 32) / _shares)
@@ -2099,19 +2133,25 @@ void reactor::run_tasks(task_queue& tq) {
     *internal::current_scheduling_group_ptr() = scheduling_group(tq._id);
     auto& tasks = tq._q;
     while (!tasks.empty()) {
-        auto tsk = std::move(tasks.front());
-        tasks.pop_front();
+      auto frag = &tasks.fragments.front();
+      // Note: we have to reload frag->start, because queue_fragment::push_front() can update it.
+      while (frag->start < frag->end) {
+        auto tsk = frag->tasks[frag->start ++];
+        --tasks.nr_tasks;
         STAP_PROBE(seastar, reactor_run_tasks_single_start);
         task_histogram_add_task(*tsk);
         tsk->run_and_dispose();
-        tsk.release();
         STAP_PROBE(seastar, reactor_run_tasks_single_end);
         ++tq._tasks_processed;
         ++_global_tasks_processed;
         // check at end of loop, to allow at least one task to run
         if (need_preempt()) {
             if (tasks.size() <= _max_task_backlog) {
-                break;
+                if (frag->start == frag->end) {
+                    tasks.fragments.erase(tasks.fragments.iterator_to(*frag));
+                    delete frag;
+                }
+                return;
             } else {
                 // While need_preempt() is set, task execution is inefficient due to
                 // need_preempt() checks breaking out of loops and .then() calls. See
@@ -2119,6 +2159,11 @@ void reactor::run_tasks(task_queue& tq) {
                 reset_preemption_monitor();
             }
         }
+      }
+      if (frag->start == frag->end) {
+          tasks.fragments.erase(tasks.fragments.iterator_to(*frag));
+          delete frag;
+      }
     }
 }
 
