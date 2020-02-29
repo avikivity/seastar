@@ -144,6 +144,12 @@ class network_interface_impl;
 /// \addtogroup networking-module
 /// @{
 
+struct connected_socket_input_stream_config final {
+    unsigned buffer_size = 8192;
+    unsigned min_buffer_size = 512;
+    unsigned max_buffer_size = 128 * 1024;
+};
+
 /// A TCP (or other stream-based protocol) connection.
 ///
 /// A \c connected_socket represents a full-duplex stream between
@@ -165,8 +171,10 @@ public:
     connected_socket& operator=(connected_socket&& cs) noexcept;
     /// Gets the input stream.
     ///
+    /// \param csisc Configuration for the input_stream returned
+    ///
     /// Gets an object returning data sent from the remote endpoint.
-    input_stream<char> input();
+    input_stream<char> input(connected_socket_input_stream_config csisc = {});
     /// Gets the output stream.
     ///
     /// Gets an object that sends data to the remote endpoint.
