@@ -85,7 +85,7 @@ public:
     void push_back(const T& data);
     void push_back(T&& data);
     template <typename... A>
-    void emplace_back(A&&... args);
+    T& emplace_back(A&&... args);
     T& front();
     const T& front() const;
     T& back();
@@ -386,12 +386,13 @@ circular_buffer<T, Alloc>::push_back(T&& data) {
 template <typename T, typename Alloc>
 template <typename... Args>
 inline
-void
+T&
 circular_buffer<T, Alloc>::emplace_back(Args&&... args) {
     maybe_expand();
     auto p = &_impl.storage[mask(_impl.end)];
     _impl.construct(p, std::forward<Args>(args)...);
     ++_impl.end;
+    return *p;
 }
 
 template <typename T, typename Alloc>
