@@ -469,6 +469,8 @@ private:
     future<size_t>
     do_write_some(pollable_fd_state& fd, const void* buffer, size_t size);
     future<size_t>
+    do_write_some(pollable_fd_state& fd, const ::iovec* iov, size_t niov);
+    future<size_t>
     do_write_some(pollable_fd_state& fd, net::packet& p);
 public:
     static boost::program_options::options_description get_options_description(reactor_config cfg);
@@ -519,6 +521,8 @@ public:
     future<> posix_connect(lw_shared_ptr<pollable_fd> pfd, socket_address sa, socket_address local);
 
     future<> write_all(pollable_fd_state& fd, const void* buffer, size_t size);
+    future<> write_all(pollable_fd_state& fd, temporary_buffer<char> buf);
+    future<> write_all(pollable_fd_state& fd, std::vector<temporary_buffer<char>> bufs);
 
     future<file> open_file_dma(sstring name, open_flags flags, file_open_options options = {});
     future<file> open_directory(sstring name);
@@ -648,6 +652,7 @@ private:
     void replace_poller(pollfn* old, pollfn* neww);
     void register_metrics();
     future<> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
+    future<> write_all_part(pollable_fd_state& fd, std::vector<temporary_buffer<char>> bufs, std::vector<::iovec> iov);
 
     future<> fdatasync(int fd);
 

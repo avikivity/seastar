@@ -183,6 +183,7 @@ public:
     virtual future<temporary_buffer<char>> read_some(pollable_fd_state& fd, internal::buffer_allocator* ba) = 0;
     virtual future<size_t> write_some(pollable_fd_state& fd, net::packet& p) = 0;
     virtual future<size_t> write_some(pollable_fd_state& fd, const void* buffer, size_t len) = 0;
+    virtual future<size_t> write_some(pollable_fd_state& fd, const ::iovec* iov, size_t niov) = 0;
 
     virtual void signal_received(int signo, siginfo_t* siginfo, void* ignore) = 0;
     virtual void start_tick() = 0;
@@ -232,6 +233,7 @@ public:
     virtual future<temporary_buffer<char>> read_some(pollable_fd_state& fd, internal::buffer_allocator* ba) override;
     virtual future<size_t> write_some(pollable_fd_state& fd, net::packet& p) override;
     virtual future<size_t> write_some(pollable_fd_state& fd, const void* buffer, size_t len) override;
+    virtual future<size_t> write_some(pollable_fd_state& fd, const ::iovec* iov, size_t niov) override;
 
     virtual void signal_received(int signo, siginfo_t* siginfo, void* ignore) override;
     virtual void start_tick() override;
@@ -280,6 +282,7 @@ public:
     virtual future<temporary_buffer<char>> read_some(pollable_fd_state& fd, internal::buffer_allocator* ba) override;
     virtual future<size_t> write_some(pollable_fd_state& fd, net::packet& p) override;
     virtual future<size_t> write_some(pollable_fd_state& fd, const void* buffer, size_t len) override;
+    virtual future<size_t> write_some(pollable_fd_state& fd, const ::iovec* iov, size_t niov) override;
 
     virtual void signal_received(int signo, siginfo_t* siginfo, void* ignore) override;
     virtual void start_tick() override;

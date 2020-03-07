@@ -81,6 +81,8 @@ public:
     future<> write_all(const uint8_t* buffer, size_t size);
     future<size_t> write_some(net::packet& p);
     future<> write_all(net::packet& p);
+    future<> write_all(temporary_buffer<char> buf);
+    future<> write_all(std::vector<temporary_buffer<char>> bufs);
     future<> readable();
     future<> writeable();
     future<> readable_or_writeable();
@@ -134,6 +136,12 @@ public:
     }
     future<> write_all(net::packet& p) {
         return _s->write_all(p);
+    }
+    future<> write_all(temporary_buffer<char> buf) {
+        return _s->write_all(std::move(buf));
+    }
+    future<> write_all(std::vector<temporary_buffer<char>> bufs) {
+        return _s->write_all(std::move(bufs));
     }
     future<> readable() {
         return _s->readable();

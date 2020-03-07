@@ -551,6 +551,11 @@ reactor_backend_aio::write_some(pollable_fd_state& fd, const void* buffer, size_
 }
 
 future<size_t>
+reactor_backend_aio::write_some(pollable_fd_state& fd, const ::iovec* iov, size_t niov) {
+    return engine().do_write_some(fd, iov, niov);
+}
+
+future<size_t>
 reactor_backend_aio::write_some(pollable_fd_state& fd, net::packet& p) {
     return engine().do_write_some(fd, p);
 }
@@ -822,6 +827,11 @@ reactor_backend_epoll::read_some(pollable_fd_state& fd, internal::buffer_allocat
 future<size_t>
 reactor_backend_epoll::write_some(pollable_fd_state& fd, const void* buffer, size_t len) {
     return engine().do_write_some(fd, buffer, len);
+}
+
+future<size_t>
+reactor_backend_epoll::write_some(pollable_fd_state& fd, const ::iovec* iov, size_t niov) {
+    return engine().do_write_some(fd, iov, niov);
 }
 
 future<size_t>

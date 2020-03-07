@@ -316,6 +316,23 @@ reactor::do_write_some(pollable_fd_state& fd, const void* buffer, size_t len) {
 }
 
 future<size_t>
+reactor::do_write_some(pollable_fd_state& fd, const ::iovec* iov, size_t niov) {
+    return writeable(fd).then([this, &fd, iov, niov] () mutable {
+        struct ::msghdr h = {};
+        h.msg_iov = const_cast<::iovec*>(iov);
+        h.msg_iovlen = niov;
+        auto r = fd.fd.sendmsg(&h, MSG_NOSIGNAL);
+        if (!r) {
+            return do_write_some(fd, iov, niov);
+        }
+        if (size_t(*r) == iovec_len(iov, niov)) {
+            fd.speculate_epoll(EPOLLOUT);
+        }
+        return make_ready_future<size_t>(*r);
+    });
+}
+
+future<size_t>
 reactor::do_write_some(pollable_fd_state& fd, net::packet& p) {
     return writeable(fd).then([this, &fd, &p] () mutable {
         static_assert(offsetof(iovec, iov_base) == offsetof(net::fragment, base) &&
@@ -359,6 +376,61 @@ reactor::write_all(pollable_fd_state& fd, const void* buffer, size_t len) {
     return write_all_part(fd, buffer, len, 0);
 }
 
+future<>
+reactor::write_all(pollable_fd_state& fd, temporary_buffer<char> buf) {
+    if (buf.empty()) {
+        return make_ready_future<>();
+    }
+    auto b = buf.get();
+    auto s = buf.size();
+    return _backend->write_some(fd, b, s).then([this, &fd, buf = std::move(buf)] (size_t written) mutable {
+        buf.trim_front(written);
+        // This recursion is bounded:
+        // - if buf became empty (the common case), the nested call will return immediately
+        // - if we got a short write due to an error, the next call will collect the error and return
+        // - if we got a short write due to socket buffer full, we next write will return EAGAIN
+        //   and we'll schedule a poll of the underlying fd
+        return write_all(fd, std::move(buf));
+    });
+}
+
+future<> reactor::write_all_part(pollable_fd_state& fd, std::vector<temporary_buffer<char>> bufs, std::vector<::iovec> iov) {
+    if (iov.empty()) {
+        return make_ready_future<>();
+    }
+    auto b = iov.data();
+    auto s = iov.size();
+    return _backend->write_some(fd, b, s).then([this, &fd, bufs = std::move(bufs), iov = std::move(iov)] (size_t written) mutable {
+        unsigned nr_consumed = 0;
+        while (written && written >= iov[nr_consumed].iov_len) {
+            written -= iov[nr_consumed++].iov_len;
+        }
+        if (written) {
+            iov[nr_consumed].iov_base = reinterpret_cast<char*>(iov[nr_consumed].iov_base) + written;
+            iov[nr_consumed].iov_len -= written;
+            written = 0;
+        }
+        bufs.erase(bufs.begin(), bufs.begin() + nr_consumed);
+        iov.erase(iov.begin(), iov.begin() + nr_consumed);
+        // This recursion is bounded:
+        // - if buf became empty (the common case), the nested call will return immediately
+        // - if we got a short write due to an error, the next call will collect the error and return
+        // - if we got a short write due to socket buffer full, we next write will return EAGAIN
+        //   and we'll schedule a poll of the underlying fd
+        return write_all_part(fd, std::move(bufs), std::move(iov));
+    });
+}
+
+future<>
+reactor::write_all(pollable_fd_state& fd, std::vector<temporary_buffer<char>> bufs) {
+    std::vector<::iovec> iov;
+    iov.reserve(bufs.size());
+    for (auto& tb : bufs) {
+        iov.push_back({tb.get_write(), tb.size()});
+    }
+    return write_all_part(fd, std::move(bufs), std::move(iov));
+}
+
 future<size_t> pollable_fd_state::read_some(char* buffer, size_t size) {
     return engine()._backend->read_some(*this, buffer, size);
 }
@@ -381,6 +453,14 @@ future<size_t> pollable_fd_state::write_some(net::packet& p) {
 
 future<> pollable_fd_state::write_all(const char* buffer, size_t size) {
     return engine().write_all(*this, buffer, size);
+}
+
+future<> pollable_fd_state::write_all(temporary_buffer<char> buf) {
+    return engine().write_all(*this, std::move(buf));
+}
+
+future<> pollable_fd_state::write_all(std::vector<temporary_buffer<char>> bufs) {
+    return engine().write_all(*this, std::move(bufs));
 }
 
 future<> pollable_fd_state::write_all(const uint8_t* buffer, size_t size) {
