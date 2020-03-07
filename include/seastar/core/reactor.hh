@@ -352,7 +352,6 @@ private:
     sched_clock::duration _total_sleep;
     sched_clock::time_point _start_time = sched_clock::now();
     std::chrono::nanoseconds _max_poll_time = calculate_poll_time();
-    circular_buffer<output_stream<char>* > _flush_batching;
     std::atomic<bool> _sleeping alignas(seastar::cache_line_size);
     pthread_t _thread_id alignas(seastar::cache_line_size) = pthread_self();
     bool _strict_o_direct = true;
@@ -366,7 +365,6 @@ private:
     void wakeup();
     size_t handle_aio_error(internal::linux_abi::iocb* iocb, int ec);
     bool flush_pending_aio();
-    bool flush_tcp_batches();
     bool flush_scheduled_tasks();
     bool do_expire_lowres_timers();
     bool do_check_lowres_timers() const;
@@ -682,7 +680,6 @@ private:
     friend class smp_message_queue;
     friend class poller;
     friend class scheduling_group;
-    friend void add_to_flush_poller(output_stream<char>* os);
     friend int ::_Unwind_RaiseException(struct _Unwind_Exception *h);
     friend void report_failed_future(const std::exception_ptr& eptr) noexcept;
     metrics::metric_groups _metric_groups;

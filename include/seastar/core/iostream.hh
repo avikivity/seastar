@@ -283,11 +283,6 @@ class output_stream final {
     size_t _begin = 0;
     size_t _end = 0;
     bool _trim_to_size = false;
-    bool _batch_flushes = false;
-    compat::optional<promise<>> _in_batch;
-    bool _flush = false;
-    bool _flushing = false;
-    std::exception_ptr _ex;
 private:
     size_t available() const { return _end - _begin; }
     size_t possibly_available() const { return _size - _begin; }
@@ -301,11 +296,10 @@ private:
 public:
     using char_type = CharType;
     output_stream() = default;
-    output_stream(data_sink fd, size_t size, bool trim_to_size = false, bool batch_flushes = false)
-        : _fd(std::move(fd)), _size(size), _trim_to_size(trim_to_size), _batch_flushes(batch_flushes) {}
+    output_stream(data_sink fd, size_t size, bool trim_to_size = false)
+        : _fd(std::move(fd)), _size(size), _trim_to_size(trim_to_size) {}
     output_stream(output_stream&&) = default;
     output_stream& operator=(output_stream&&) = default;
-    ~output_stream() { assert(!_in_batch && "Was this stream properly closed?"); }
     future<> write(const char_type* buf, size_t n);
     future<> write(const char_type* buf);
 

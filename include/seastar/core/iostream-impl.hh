@@ -73,16 +73,7 @@ future<> output_stream<CharType>::write(scattered_message<CharType> msg) {
 template<typename CharType>
 future<>
 output_stream<CharType>::zero_copy_put(net::packet p) {
-    // if flush is scheduled, disable it, so it will not try to write in parallel
-    _flush = false;
-    if (_flushing) {
-        // flush in progress, wait for it to end before continuing
-        return _in_batch.value().get_future().then([this, p = std::move(p)] () mutable {
-            return _fd.put(std::move(p));
-        });
-    } else {
-        return _fd.put(std::move(p));
-    }
+    return _fd.put(std::move(p));
 }
 
 // Writes @p in chunks of _size length. The last chunk is buffered if smaller.
@@ -389,7 +380,7 @@ output_stream<CharType>::slow_write(const char_type* buf, size_t n) {
 template <typename CharType>
 future<>
 output_stream<CharType>::flush() {
-    if (!_batch_flushes) {
+    {
         if (_end) {
             _buf.trim(_end);
             _end = 0;
@@ -401,91 +392,20 @@ output_stream<CharType>::flush() {
                 return _fd.flush();
             });
         }
-    } else {
-        if (_ex) {
-            // flush is a good time to deliver outstanding errors
-            return make_exception_future<>(std::move(_ex));
-        } else {
-            _flush = true;
-            if (!_in_batch) {
-                add_to_flush_poller(this);
-                _in_batch = promise<>();
-            }
-        }
     }
     return make_ready_future<>();
 }
 
-void add_to_flush_poller(output_stream<char>* x);
-
 template <typename CharType>
 future<>
 output_stream<CharType>::put(temporary_buffer<CharType> buf) {
-    // if flush is scheduled, disable it, so it will not try to write in parallel
-    _flush = false;
-    if (_flushing) {
-        // flush in progress, wait for it to end before continuing
-        return _in_batch.value().get_future().then([this, buf = std::move(buf)] () mutable {
-            return _fd.put(std::move(buf));
-        });
-    } else {
-        return _fd.put(std::move(buf));
-    }
-}
-
-template <typename CharType>
-void
-output_stream<CharType>::poll_flush() {
-    if (!_flush) {
-        // flush was canceled, do nothing
-        _flushing = false;
-        _in_batch.value().set_value();
-        _in_batch = compat::nullopt;
-        return;
-    }
-
-    auto f = make_ready_future();
-    _flush = false;
-    _flushing = true; // make whoever wants to write into the fd to wait for flush to complete
-
-    if (_end) {
-        // send whatever is in the buffer right now
-        _buf.trim(_end);
-        _end = 0;
-        f = _fd.put(std::move(_buf));
-    } else if(_zc_bufs) {
-        f = _fd.put(std::move(_zc_bufs));
-    }
-
-    // FIXME: future is discarded
-    (void)f.then([this] {
-        return _fd.flush();
-    }).then_wrapped([this] (future<> f) {
-        try {
-            f.get();
-        } catch (...) {
-            _ex = std::current_exception();
-        }
-        // if flush() was called while flushing flush once more
-        poll_flush();
-    });
+    return _fd.put(std::move(buf));
 }
 
 template <typename CharType>
 future<>
 output_stream<CharType>::close() {
     return flush().finally([this] {
-        if (_in_batch) {
-            return _in_batch.value().get_future();
-        } else {
-            return make_ready_future();
-        }
-    }).then([this] {
-        // report final exception as close error
-        if (_ex) {
-            std::rethrow_exception(_ex);
-        }
-    }).finally([this] {
         return _fd.close();
     });
 }

@@ -2203,17 +2203,6 @@ void reactor::force_poll() {
 }
 
 bool
-reactor::flush_tcp_batches() {
-    bool work = _flush_batching.size();
-    while (!_flush_batching.empty()) {
-        auto os = std::move(_flush_batching.front());
-        _flush_batching.pop_front();
-        os->poll_flush();
-    }
-    return work;
-}
-
-bool
 reactor::flush_scheduled_tasks() {
     bool work = _tasks_scheduled_after_poll.size();
     // Calling reversed since we'll be inserting them in reversed order
@@ -2321,25 +2310,6 @@ public:
     }
     virtual void exit_interrupt_mode() override final {
         ::pthread_sigmask(SIG_SETMASK, &_r._active_sigmask, nullptr);
-    }
-};
-
-class reactor::batch_flush_pollfn final : public reactor::pollfn {
-    reactor& _r;
-public:
-    batch_flush_pollfn(reactor& r) : _r(r) {}
-    virtual bool poll() final override {
-        return _r.flush_tcp_batches();
-    }
-    virtual bool pure_poll() override final {
-        return poll(); // actually performs work, but triggers no user continuations, so okay
-    }
-    virtual bool try_enter_interrupt_mode() override {
-        // This is a passive poller, so if a previous poll
-        // returned false (idle), there's no more work to do.
-        return true;
-    }
-    virtual void exit_interrupt_mode() override final {
     }
 };
 
@@ -2705,7 +2675,6 @@ int reactor::run() {
     poller kernel_submit_work_poller(std::make_unique<kernel_submit_work_pollfn>(*this));
     poller final_real_kernel_completions_poller(std::make_unique<reap_kernel_completions_pollfn>(*this));
 
-    poller batch_flush_poller(std::make_unique<batch_flush_pollfn>(*this));
     poller schedule_tasks_after_poll(std::make_unique<schedule_tasks_after_poll_pollfn>(*this));
     poller execution_stage_poller(std::make_unique<execution_stage_pollfn>());
 
@@ -4233,10 +4202,6 @@ future<> later() {
         p.set_value();
     }));
     return f;
-}
-
-void add_to_flush_poller(output_stream<char>* os) {
-    engine()._flush_batching.emplace_back(os);
 }
 
 reactor::sched_clock::duration reactor::total_idle_time() {
