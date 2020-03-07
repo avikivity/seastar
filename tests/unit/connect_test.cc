@@ -1,6 +1,9 @@
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/test_runner.hh>
 #include <seastar/net/ip.hh>
+#include <seastar/core/seastar.hh>
+#include <seastar/core/scattered_message.hh>
 
 using namespace seastar;
 using namespace net;
@@ -70,4 +73,25 @@ SEASTAR_TEST_CASE(test_accept_after_abort) {
           });
         });
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_write_scattered_message) {
+    std::default_random_engine& rnd = testing::local_random_engine;
+    auto distr = std::uniform_int_distribution<uint16_t>(12000, 65000);
+    auto sa = make_ipv4_address({"127.0.0.1", distr(rnd)});
+    seastar::api_v2::server_socket listener = listen(sa, listen_options());
+    auto conn_write = seastar::connect(sa).get0();
+    auto conn_read = listener.accept().get0().connection;
+    auto out = conn_write.output();
+    scattered_message<char> sm;
+    sm.append_static("abc", 3);
+    sm.append_static("defg", 4);
+    sm.append_static("hij", 3);
+    out.write(std::move(sm)).get();
+    out.flush().get();
+    auto in = conn_read.input();
+    auto data = in.read_exactly(10).get0();
+    BOOST_REQUIRE_EQUAL(std::string(data.get(), data.size()), "abcdefghij");
+    out.close().get();
+    in.close().get();
 }
