@@ -34,6 +34,7 @@
 #include <seastar/util/std-compat.hh>
 #include <netinet/tcp.h>
 #include <netinet/sctp.h>
+#include <seastar/core/scheduling_specific.hh>
 
 namespace std {
 
@@ -582,20 +583,118 @@ std::vector<iovec> to_iovec(std::vector<temporary_buffer<char>>& buf_vec) {
 
 future<>
 posix_data_sink_impl::put(temporary_buffer<char> buf) {
-    return _fd->write_all(buf.get(), buf.size()).then([d = buf.release()] {});
+    if (_fd->no_more_send()) {
+        return make_exception_future<>(std::system_error(EPIPE, std::system_category()));
+    }
+    bool old_queued_bytes = _queued_bytes;
+    auto new_buf_size = buf.size();
+    if (_queue.empty() || !_queue.back().try_coalece_with(buf)) {
+        _queue.push_back(std::move(buf));
+    }
+    _queued_bytes += new_buf_size;
+    return maybe_flush(old_queued_bytes);
 }
 
 future<>
 posix_data_sink_impl::put(packet p) {
-    _p = std::move(p);
-    return _fd->write_all(_p).then([this] { _p.reset(); });
+    if (_fd->no_more_send()) {
+        return make_exception_future<>(std::system_error(EPIPE, std::system_category()));
+    }
+    bool old_queued_bytes = _queued_bytes;
+    p.release_into([this] (temporary_buffer<char>&& tb) {
+        auto& new_tb = _queue.emplace_back(std::move(tb));
+        _queued_bytes += new_tb.size();
+    });
+    return maybe_flush(old_queued_bytes);
+}
+
+future<>
+posix_data_sink_impl::maybe_flush(size_t old_queued_bytes) {
+    if (_queued_bytes <= max_capacity()) {
+        // A small amount of data is queued, let it be flushed in the background
+        // so that batch several flushes together
+        if (!old_queued_bytes) {
+            auto& ft = scheduling_group_get_specific<flush_task>(current_scheduling_group(), *_flush_task_key);
+            ft.queue(this);
+        }
+        return make_ready_future<>();
+    } else {
+        // A large amount of data is queued, flush it now to avoid accumulating
+        // buffered data.
+        do_flush_now();
+        return _queue_empty_promise->get_future();
+    }
+}
+
+void
+posix_data_sink_impl::do_flush_now() {
+    if (_queue_empty_promise) {
+        // if _queue_empty_promise was engaged, then flush_task is already
+        // flushing this, and all we need to do is wait for it.
+        return;
+    } else {
+        // if _queue_empty_promise was not engaged, we need to flush ourselves.
+        _queue_empty_promise.emplace();
+        auto nr = _queue.size();
+        auto qb = std::exchange(_queued_bytes, 0);
+        if (nr == 0) {
+            _queue_empty_promise->set_value();
+            _queue_empty_promise = compat::nullopt;
+        } else if (nr == 1) {
+            auto b = std::move(_queue.back());
+            _queue.pop_back();
+            _queued_bytes = 0;
+            // The future is efectively forwarded to *_queue_empty_promise, so it's okay to
+            // discard it
+            (void)_fd->write_all(std::move(b)).then_wrapped([this, qb] (future<> result) {
+                result.forward_to(std::move(*_queue_empty_promise));
+                _queue_empty_promise = compat::nullopt;
+            });
+        } else {
+            std::vector<temporary_buffer<char>> v;
+            try {
+                v.reserve(nr);
+            } catch (...) {
+                _queue.clear();
+                _queued_bytes = 0;
+                _queue_empty_promise->set_exception(std::current_exception());
+            }
+            for (auto& b : _queue) {
+                v.push_back(std::move(b));
+            }
+            _queue.clear();
+            _queued_bytes = 0;
+            // The future is efectively forwarded to *_queue_empty_promise, so it's okay to
+            // discard it
+            (void)_fd->write_all(std::move(v)).then_wrapped([this, qb] (future<> result) {
+                result.forward_to(std::move(*_queue_empty_promise));
+                _queue_empty_promise = compat::nullopt;
+            });
+        }
+    }
 }
 
 future<>
 posix_data_sink_impl::close() {
-    _fd->shutdown(SHUT_WR);
-    return make_ready_future<>();
+    do_flush_now();
+    auto fut = make_ready_future<>();
+    if (_queue_empty_promise) {
+        // First, make sure any data already pending is flushed out
+        fut = _queue_empty_promise->get_future();
+    }
+    return fut.finally([this] {
+        _fd->shutdown(SHUT_WR);
+    });
 }
+
+future<>
+posix_data_sink_impl::setup_batch_flushing() {
+    return scheduling_group_key_create(make_scheduling_group_key_config<flush_task>()).then([] (scheduling_group_key key) {
+        _flush_task_key = key;
+    });
+}
+
+compat::optional<scheduling_group_key> posix_data_sink_impl::_flush_task_key;
 
 server_socket
 posix_network_stack::listen(socket_address sa, listen_options opt) {

@@ -119,15 +119,58 @@ public:
     future<> close() override;
 };
 
-class posix_data_sink_impl : public data_sink_impl {
+class posix_data_sink_impl final : public data_sink_impl {
     lw_shared_ptr<pollable_fd> _fd;
-    packet _p;
+    circular_buffer<temporary_buffer<char>> _queue;
+    size_t _queued_bytes = 0;
+    // If engaged, someone (flush_task or put()) is writing data to _fd
+    // and will fulfil the promise (and disenage it).
+    // If not engaged, nobody is writing data to _fd.
+    compat::optional<promise<>> _queue_empty_promise;
+    static compat::optional<scheduling_group_key> _flush_task_key;
+    class flush_task : public task {
+        bool _queued = false;
+        circular_buffer<posix_data_sink_impl*> _work;
+    public:
+        void queue(posix_data_sink_impl* sink) {
+            try {
+                _work.push_back(sink);
+            } catch (...) {
+                // was not able to defer, do it now instead.
+                sink->do_flush_now();
+            }
+            if (!_queued) {
+                _queued = true;
+                internal::schedule_after_poll(this);
+            }
+        }
+        virtual void run_and_dispose() noexcept override {
+            while (!_work.empty()) {
+                posix_data_sink_impl* sink = _work.front();
+                _work.pop_front();
+                sink->do_flush_now();
+                if (need_preempt()) {
+                    internal::schedule_after_poll(this);
+                    return;
+                }
+            }
+            _queued = false;
+        }
+    };
+private:
+    future<> maybe_flush(size_t old_queued_bytes);
+    void do_flush_now();
+    static size_t max_capacity() {
+        return 32*1024;
+    }
 public:
     explicit posix_data_sink_impl(lw_shared_ptr<pollable_fd> fd) : _fd(std::move(fd)) {}
     using data_sink_impl::put;
     future<> put(packet p) override;
     future<> put(temporary_buffer<char> buf) override;
     future<> close() override;
+public:
+    static future<> setup_batch_flushing();
 };
 
 class posix_ap_server_socket_impl : public api_v2::server_socket_impl {
@@ -200,7 +243,9 @@ public:
     virtual ::seastar::socket socket() override;
     virtual net::udp_channel make_udp_channel(const socket_address&) override;
     static future<std::unique_ptr<network_stack>> create(boost::program_options::variables_map opts, compat::polymorphic_allocator<char>* allocator=memory::malloc_allocator) {
+      return posix_data_sink_impl::setup_batch_flushing().then([opts = std::move(opts), allocator] () mutable {
         return make_ready_future<std::unique_ptr<network_stack>>(std::unique_ptr<network_stack>(new posix_network_stack(opts, allocator)));
+      });
     }
     virtual bool has_per_core_namespace() override { return _reuseport; };
     bool supports_ipv6() const override;
