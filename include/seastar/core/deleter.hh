@@ -85,6 +85,12 @@ public:
     /// Appends another deleter to this deleter.  When this deleter is
     /// destroyed, both encapsulated actions will be carried out.
     void append(deleter d);
+    /// Checks whether this \c deleter is the same as another.
+    ///
+    /// \return `true` if both deleters control the same lifetime
+    bool is_same_as(const deleter& other) const {
+        return _impl == other._impl;
+    }
 private:
     static bool is_raw_object(impl* i) {
         auto x = reinterpret_cast<uintptr_t>(i);

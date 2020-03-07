@@ -94,3 +94,28 @@ SEASTAR_TEST_CASE(test_temporary_buffer_aligned) {
     }
     return make_ready_future<>();
 }
+
+SEASTAR_TEST_CASE(test_temporary_buffer_coalescing_works) {
+    auto b = temporary_buffer<char>(5000);
+    auto b1 = b.share(0, 300);
+    auto b2 = b.share(300, 70);
+    auto r = b1.try_coalece_with(b2);
+    BOOST_REQUIRE(r);
+    BOOST_REQUIRE_EQUAL(b1.begin(), b.begin());
+    BOOST_REQUIRE_EQUAL(b1.size(), 370);
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_temporary_buffer_coalescing_fails_bad_offsets) {
+    auto b = temporary_buffer<char>(5000);
+    auto b1 = b.share(0, 300);
+    auto b2 = b.share(320, 70);
+    auto r = b1.try_coalece_with(b2);
+    BOOST_REQUIRE(!r);
+    BOOST_REQUIRE_EQUAL(b1.begin(), b.begin());
+    BOOST_REQUIRE_EQUAL(b1.size(), 300);
+    BOOST_REQUIRE_EQUAL(b2.begin(), b.begin() + 320);
+    BOOST_REQUIRE_EQUAL(b2.size(), 70);
+    return make_ready_future<>();
+}
+

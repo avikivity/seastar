@@ -61,8 +61,12 @@ template <typename CharType>
 class temporary_buffer {
     static_assert(sizeof(CharType) == 1, "must buffer stream of bytes");
     CharType* _buffer;
-    size_t _size;
+    unsigned _size;
+    unsigned _offset_from_orig_base = 0;
     deleter _deleter;
+private:
+    temporary_buffer(CharType* buf, size_t size, deleter d, size_t offset_from_orig_base)
+        : _buffer(buf), _size(size), _offset_from_orig_base(offset_from_orig_base), _deleter(std::move(d)) {}
 public:
     /// Creates a \c temporary_buffer of a specified size.  The buffer is not shared
     /// with anyone, and is not initialized.
@@ -83,9 +87,11 @@ public:
     temporary_buffer(const temporary_buffer&) = delete;
 
     /// Moves a \c temporary_buffer.
-    temporary_buffer(temporary_buffer&& x) noexcept : _buffer(x._buffer), _size(x._size), _deleter(std::move(x._deleter)) {
+    temporary_buffer(temporary_buffer&& x) noexcept : _buffer(x._buffer), _size(x._size)
+            , _offset_from_orig_base(x._offset_from_orig_base), _deleter(std::move(x._deleter)) {
         x._buffer = nullptr;
         x._size = 0;
+        x._offset_from_orig_base = 0;
     }
 
     /// Creates a \c temporary_buffer with a specific deleter.
@@ -109,6 +115,7 @@ public:
         if (this != &x) {
             _buffer = x._buffer;
             _size = x._size;
+            _offset_from_orig_base = x._offset_from_orig_base;
             _deleter = std::move(x._deleter);
             x._buffer = nullptr;
             x._size = 0;
@@ -152,7 +159,7 @@ public:
     ///
     /// \return a clone of the buffer object.
     temporary_buffer share() {
-        return temporary_buffer(_buffer, _size, _deleter.share());
+        return temporary_buffer(_buffer, _size, _deleter.share(), _offset_from_orig_base);
     }
     /// Create a new \c temporary_buffer object referring to a substring of the
     /// same underlying data.  The underlying \ref deleter will not be destroyed
@@ -165,8 +172,33 @@ public:
         auto ret = share();
         ret._buffer += pos;
         ret._size = len;
+        ret._offset_from_orig_base += pos;
         return ret;
     }
+    /// Attempt to coalesce two \c temporary_buffer objects.
+    ///
+    /// Candidates for coalescing are two buffers that were derived from the
+    /// same original buffer via share(). The buffers must be adjacent -
+    /// the second must start where the first ends.
+    ///
+    /// If colaescing succeeds, the first buffer ("this") is extended to
+    /// contain both buffers, and the second buffer is made empty. If
+    /// coalescing fails, the two buffers are not modified.
+    ///
+    /// \return `true` iff coalescing succeeds
+    bool try_coalece_with(temporary_buffer& second_buffer) {
+        if (_deleter.is_same_as(second_buffer._deleter)
+                && (_buffer - _offset_from_orig_base)
+                        == (second_buffer._buffer - second_buffer._offset_from_orig_base)
+                && _buffer + _size == second_buffer._buffer) {
+            _size += second_buffer._size;
+            second_buffer = {};
+            return true;
+        } else {
+            return false;
+        }
+    }
+
     /// Clone the current \c temporary_buffer object into a new one.
     /// This creates a temporary buffer with the same length and data but not
     /// pointing to the memory of the original object.
