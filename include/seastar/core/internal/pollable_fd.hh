@@ -168,6 +168,12 @@ public:
     file_desc& get_file_desc() const { return _s->fd; }
     void shutdown(int how);
     void close() { _s.reset(); }
+    bool no_more_recv() const {
+        return _s->no_more_recv;
+    }
+    bool no_more_send() const {
+        return _s->no_more_send;
+    }
 protected:
     int get_fd() const { return _s->fd.get(); }
     void maybe_no_more_recv() { return _s->maybe_no_more_recv(); }

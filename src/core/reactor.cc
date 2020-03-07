@@ -1408,6 +1408,8 @@ pollable_fd::pollable_fd(file_desc fd, pollable_fd::speculation speculate)
 {}
 
 void pollable_fd::shutdown(int how) {
+    _s->no_more_recv |= how == SHUT_RD || how == SHUT_RDWR;
+    _s->no_more_send |= how == SHUT_WR || how == SHUT_RDWR;
     engine()._backend->shutdown(*_s, how);
 }
 
