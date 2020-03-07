@@ -73,6 +73,7 @@
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/algorithm/clamp.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/adaptor/reversed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/version.hpp>
 #include <atomic>
@@ -2131,6 +2132,19 @@ reactor::flush_tcp_batches() {
 }
 
 bool
+reactor::flush_scheduled_tasks() {
+    bool work = _tasks_scheduled_after_poll.size();
+    // Calling reversed since we'll be inserting them in reversed order
+    for (auto* tsk : _tasks_scheduled_after_poll | boost::adaptors::reversed) {
+        // These tasks were already delayed for batching, don't delay them
+        // any more
+        schedule_urgent(tsk);
+    }
+    _tasks_scheduled_after_poll.clear();
+    return work;
+}
+
+bool
 reactor::do_expire_lowres_timers() {
     if (_lowres_next_timeout == lowres_clock::time_point()) {
         return false;
@@ -2234,6 +2248,25 @@ public:
     batch_flush_pollfn(reactor& r) : _r(r) {}
     virtual bool poll() final override {
         return _r.flush_tcp_batches();
+    }
+    virtual bool pure_poll() override final {
+        return poll(); // actually performs work, but triggers no user continuations, so okay
+    }
+    virtual bool try_enter_interrupt_mode() override {
+        // This is a passive poller, so if a previous poll
+        // returned false (idle), there's no more work to do.
+        return true;
+    }
+    virtual void exit_interrupt_mode() override final {
+    }
+};
+
+class reactor::schedule_tasks_after_poll_pollfn final : public reactor::pollfn {
+    reactor& _r;
+public:
+    schedule_tasks_after_poll_pollfn(reactor& r) : _r(r) {}
+    virtual bool poll() final override {
+        return _r.flush_scheduled_tasks();
     }
     virtual bool pure_poll() override final {
         return poll(); // actually performs work, but triggers no user continuations, so okay
@@ -2591,6 +2624,7 @@ int reactor::run() {
     poller final_real_kernel_completions_poller(std::make_unique<reap_kernel_completions_pollfn>(*this));
 
     poller batch_flush_poller(std::make_unique<batch_flush_pollfn>(*this));
+    poller schedule_tasks_after_poll(std::make_unique<schedule_tasks_after_poll_pollfn>(*this));
     poller execution_stage_poller(std::make_unique<execution_stage_pollfn>());
 
     start_aio_eventfd_loop();
@@ -2773,6 +2807,16 @@ reactor::pure_poll_once() {
         }
     }
     return false;
+}
+
+void
+reactor::schedule_after_poll(task* tsk) {
+    _tasks_scheduled_after_poll.push_back(tsk);
+}
+
+void
+internal::schedule_after_poll(task* tsk) {
+    engine().schedule_after_poll(tsk);
 }
 
 class reactor::poller::registration_task final : public task {

@@ -146,6 +146,9 @@ class reactor_stall_sampler;
 class cpu_stall_detector;
 class buffer_allocator;
 
+/// Causes tsk to be scheduled after the next task quora; useful for batching.
+void schedule_after_poll(task* tsk);
+
 }
 
 class kernel_completion;
@@ -161,6 +164,7 @@ private:
 
     class signal_pollfn;
     class batch_flush_pollfn;
+    class schedule_tasks_after_poll_pollfn;
     class smp_pollfn;
     class drain_cross_cpu_freelist_pollfn;
     class lowres_timer_pollfn;
@@ -180,6 +184,7 @@ private:
     friend class epoll_pollfn;
     friend class reap_kernel_completions_pollfn;
     friend class kernel_submit_work_pollfn;
+    friend class schedule_tasks_after_poll_pollfn;
     friend class io_queue_submission_pollfn;
     friend class syscall_pollfn;
     friend class execution_stage_pollfn;
@@ -362,6 +367,7 @@ private:
     size_t handle_aio_error(internal::linux_abi::iocb* iocb, int ec);
     bool flush_pending_aio();
     bool flush_tcp_batches();
+    bool flush_scheduled_tasks();
     bool do_expire_lowres_timers();
     bool do_check_lowres_timers() const;
     void expire_manual_timers();
@@ -409,11 +415,14 @@ private:
         friend void reactor::handle_signal(int, noncopyable_function<void ()>&&);
     };
 
+    std::vector<task*> _tasks_scheduled_after_poll;
     signals _signals;
     std::unique_ptr<thread_pool> _thread_pool;
     friend class thread_pool;
     friend class internal::cpu_stall_detector;
+    friend void internal::schedule_after_poll(task*);
 
+    void schedule_after_poll(task* tsk);
     uint64_t pending_task_count() const;
     void run_tasks(task_queue& tq);
     bool have_more_tasks() const;
