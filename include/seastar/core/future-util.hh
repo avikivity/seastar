@@ -1227,18 +1227,50 @@ struct tuple_to_future;
 
 template<typename... Elements>
 struct tuple_to_future<std::tuple<Elements...>> {
-    using type = future<Elements...>;
-    using promise_type = promise<Elements...>;
+    using value_type = internal::when_all_succeed_tuple<Elements...>;
+    using type = future<value_type>;
+    using promise_type = promise<value_type>;
 
     static auto make_ready(std::tuple<Elements...> t) {
         auto create_future = [] (auto&&... args) {
-            return make_ready_future<Elements...>(std::move(args)...);
+            return make_ready_future<value_type>(value_type(std::move(args)...));
         };
         return apply(create_future, std::move(t));
     }
 
     static auto make_failed(std::exception_ptr excp) {
-        return seastar::make_exception_future<Elements...>(std::move(excp));
+        return seastar::make_exception_future<value_type>(std::move(excp));
+    }
+};
+
+template<typename Element>
+struct tuple_to_future<std::tuple<Element>> {
+    using type = future<Element>;
+    using promise_type = promise<Element>;
+
+    static auto make_ready(std::tuple<Element> t) {
+        auto create_future = [] (auto&& arg) {
+            return make_ready_future<Element>(std::move(arg));
+        };
+        return apply(create_future, std::move(t));
+    }
+
+    static auto make_failed(std::exception_ptr excp) {
+        return seastar::make_exception_future<Element>(std::move(excp));
+    }
+};
+
+template<>
+struct tuple_to_future<std::tuple<>> {
+    using type = future<>;
+    using promise_type = promise<>;
+
+    static auto make_ready(std::tuple<> t) {
+        return make_ready_future<>();
+    }
+
+    static auto make_failed(std::exception_ptr excp) {
+        return seastar::make_exception_future<>(std::move(excp));
     }
 };
 
