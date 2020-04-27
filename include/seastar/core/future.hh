@@ -509,6 +509,18 @@ struct continuation final : continuation_base_with_promise<Promise, T...> {
 
 namespace internal {
 
+// This is an internal future<> payload for seastar::when_all_succeed. It used
+// to return a variadic future (when two or more of its input futures were non-void,
+// but with variadic futures deprecated and soon gone this is no longer possible.
+//
+// Instead, we use this tuple type, and future::then() knows to unpack it.
+//
+// The whole thing is temporary for a transition period.
+template <typename... T>
+struct when_all_succeed_tuple : std::tuple<T...> {
+    using std::tuple<T...>::tuple;
+};
+
 template <typename... T>
 future<T...> make_exception_future(future_state_base&& state) noexcept;
 
@@ -949,6 +961,43 @@ struct warn_variadic_future<true> {
     void check_deprecation() {}
 };
 
+template <typename Future>
+struct call_then_impl;
+
+template <typename... T>
+struct call_then_impl<future<T...>> {
+    template <typename Func>
+    using result_type = std::result_of_t<Func (T&&...)>;
+
+    template <typename Func>
+    static auto run(future<T...>& fut, Func&& func) {
+        return fut.then_impl(std::forward<Func>(func));
+    }
+};
+
+template <typename... T>
+struct call_then_impl<future<when_all_succeed_tuple<T...>>> {
+    template <typename Func>
+    using result_type = std::result_of_t<Func (T&&...)>;
+
+    template <typename Func>
+    static auto run(future<when_all_succeed_tuple<T...>>& fut, Func&& func) {
+        return fut.then_impl([func = std::forward<Func>(func)] (when_all_succeed_tuple<T...>&& t) mutable {
+            return apply(func, static_cast<std::tuple<T...>&&>(std::move(t)));
+        });
+    }
+};
+
+template <typename Func, typename... Args>
+using call_then_impl_result_type = typename call_then_impl<future<Args...>>::template result_type<Func>;
+
+GCC6_CONCEPT(
+template <typename Func, typename... Args>
+concept bool CanInvokeWhenAllSucceed = requires {
+    typename call_then_impl_result_type<Func, Args...>;
+};
+)
+
 }
 
 /// \brief A representation of a possibly not-yet-computed value.
@@ -1193,16 +1242,16 @@ public:
     ///               unless it has failed.
     /// \return a \c future representing the return value of \c func, applied
     ///         to the eventual value of this future.
-    template <typename Func, typename Result = futurize_t<std::result_of_t<Func(T&&...)>>>
-    GCC6_CONCEPT( requires ::seastar::CanInvoke<Func, T...> )
+    template <typename Func, typename Result = futurize_t<typename internal::call_then_impl<future>::template result_type<Func>>>
+    GCC6_CONCEPT( requires ::seastar::CanInvoke<Func, T...> || internal::CanInvokeWhenAllSucceed<Func, T...>)
     Result
     then(Func&& func) noexcept {
 #ifndef SEASTAR_TYPE_ERASE_MORE
-        return then_impl(std::move(func));
+        return internal::call_then_impl<future>::run(*this, std::move(func));
 #else
         using unfuturized_result = std::result_of_t<Func(T&&...)>;
         using type_erase = noncopyable_function<unfuturized_result (T&&...)>;
-        return then_impl(type_erase(std::move(func)));
+        return internal::call_then_impl<future>::run(*this, type_erase(std::move(func)));
 #endif
     }
 
@@ -1545,6 +1594,8 @@ private:
     friend future<U...> internal::make_exception_future(future_state_base&& state) noexcept;
     template <typename... U, typename V>
     friend void internal::set_callback(future<U...>&, V*) noexcept;
+    template <typename Future>
+    friend struct internal::call_then_impl;
     /// \endcond
 };
 
