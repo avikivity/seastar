@@ -1200,9 +1200,9 @@ public:
 #ifndef SEASTAR_TYPE_ERASE_MORE
         return then_impl(std::move(func));
 #else
-        return then_impl(noncopyable_function<Result (T&&...)>([func = std::forward<Func>(func)] (T&&... args) mutable {
-            return futurize_apply(func, std::forward_as_tuple(std::move(args)...));
-        }));
+        using unfuturized_result = std::result_of_t<Func(T&&...)>;
+        using type_erase = noncopyable_function<unfuturized_result (T&&...)>;
+        return then_impl(type_erase(std::move(func)));
 #endif
     }
 
@@ -1282,11 +1282,8 @@ private:
 #ifndef SEASTAR_TYPE_ERASE_MORE
         return then_wrapped_common<AsSelf, FuncResult>(std::forward<Func>(func));
 #else
-        using futurator = futurize<FuncResult>;
-        using WrapFuncResult = typename futurator::type;
-        return then_wrapped_common<AsSelf, WrapFuncResult>(noncopyable_function<WrapFuncResult (future&&)>([func = std::forward<Func>(func)] (future&& f) mutable {
-            return futurator::invoke(std::forward<Func>(func), std::move(f));
-        }));
+        using type_erase = noncopyable_function<FuncResult (future&&)>;
+        return then_wrapped_common<AsSelf, FuncResult>(type_erase(std::forward<Func>(func)));
 #endif
     }
 
