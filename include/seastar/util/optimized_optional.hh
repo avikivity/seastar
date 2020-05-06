@@ -34,13 +34,12 @@ namespace stdx = std::experimental;
 GCC6_CONCEPT(
 
 template<typename T>
-concept bool OptimizableOptional() {
-    return stdx::is_default_constructible_v<T>
+concept OptimizableOptional =
+    stdx::is_default_constructible_v<T>
         && stdx::is_nothrow_move_assignable_v<T>
         && requires(const T& obj) {
             { bool(obj) } noexcept;
         };
-}
 
 )
 
