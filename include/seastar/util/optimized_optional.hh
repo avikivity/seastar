@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include <seastar/util/gcc6-concepts.hh>
+#include <seastar/util/concepts.hh>
 #include <seastar/util/std-compat.hh>
 
 #include <experimental/type_traits>
@@ -31,7 +31,7 @@ namespace seastar {
 
 namespace stdx = std::experimental;
 
-GCC6_CONCEPT(
+SEASTAR_CONCEPT(
 
 template<typename T>
 concept OptimizableOptional =
