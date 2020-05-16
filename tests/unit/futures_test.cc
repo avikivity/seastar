@@ -1257,3 +1257,15 @@ SEASTAR_THREAD_TEST_CASE(test_exception_future_with_backtrace) {
     // this example functions as documentation.
     (void)outer(true);
 }
+
+SEASTAR_THREAD_TEST_CASE(test_then_unpacked) {
+    make_ready_future<std::tuple<>>().then_unpack([] () {
+        BOOST_REQUIRE(true);
+    }).get();
+    make_ready_future<std::tuple<int>>(std::tuple<int>(1)).then_unpack([] (int x) {
+        BOOST_REQUIRE(x == 1);
+    }).get();
+    make_ready_future<std::tuple<int, long>>(std::tuple<int, long>(1, 2)).then_unpack([] (int x, long y) {
+        BOOST_REQUIRE(x == 1 && y == 2);
+    }).get();
+}
