@@ -1230,3 +1230,16 @@ SEASTAR_TEST_CASE(test_warn_on_broken_promise_with_no_future) {
     p.set_exception(std::runtime_error("foo"));
     return make_ready_future<>();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_then_unpacked) {
+    make_ready_future<std::tuple<>>().then_unpack([] () {
+        BOOST_REQUIRE(true);
+    }).get();
+    make_ready_future<std::tuple<int>>(std::tuple<int>(1)).then_unpack([] (int x) {
+        BOOST_REQUIRE(x == 1);
+    }).get();
+    make_ready_future<std::tuple<int, long>>(std::tuple<int, long>(1, 2)).then_unpack([] (int x, long y) {
+        BOOST_REQUIRE(x == 1 && y == 2);
+    }).get();
+}
+
