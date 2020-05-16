@@ -1259,7 +1259,11 @@ struct tuple_to_future;
 
 template<typename... Elements>
 struct tuple_to_future<std::tuple<Elements...>> {
+#if SEASTAR_API_LEVEL < 4
     using value_type = when_all_succeed_tuple<Elements...>;
+#else
+    using value_type = std::tuple<Elements...>;
+#endif
     using type = future<value_type>;
     using promise_type = promise<value_type>;
 
@@ -1274,6 +1278,8 @@ struct tuple_to_future<std::tuple<Elements...>> {
         return seastar::make_exception_future<value_type>(std::move(excp));
     }
 };
+
+#if SEASTAR_API_LEVEL < 4
 
 template<typename Element>
 struct tuple_to_future<std::tuple<Element>> {
@@ -1305,6 +1311,8 @@ struct tuple_to_future<std::tuple<>> {
         return seastar::make_exception_future<>(std::move(excp));
     }
 };
+
+#endif
 
 template<typename... Futures>
 class extract_values_from_futures_tuple {
