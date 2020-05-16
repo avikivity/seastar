@@ -556,6 +556,8 @@ struct continuation final : continuation_base_with_promise<Promise, T...> {
     Func _func;
 };
 
+#if SEASTAR_API_LEVEL < 3
+
 // This is an internal future<> payload for seastar::when_all_succeed(). It is used
 // to return a variadic future (when two or more of its input futures were non-void),
 // but with variadic futures deprecated and soon gone this is no longer possible.
@@ -570,6 +572,8 @@ struct when_all_succeed_tuple : std::tuple<T...> {
             noexcept(std::is_nothrow_move_constructible<std::tuple<T...>>::value)
             : std::tuple<T...>(std::move(t)) {}
 };
+
+#endif
 
 namespace internal {
 
@@ -1089,6 +1093,8 @@ struct call_then_impl<future<T...>> {
     }
 };
 
+#if SEASTAR_API_LEVEL < 3
+
 // Special case: we unpack the tuple before calling the function
 template <typename... T>
 struct call_then_impl<future<when_all_succeed_tuple<T...>>> {
@@ -1110,6 +1116,8 @@ struct call_then_impl<future<when_all_succeed_tuple<T...>>> {
         });
     }
 };
+
+#endif
 
 template <typename Func, typename... Args>
 using call_then_impl_result_type = typename call_then_impl<future<Args...>>::template result_type<Func>;
