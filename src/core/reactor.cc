@@ -3637,6 +3637,8 @@ void smp::register_network_stacks() {
     register_native_stack();
 }
 
+volatile char disable_optimization;
+
 // If we just mlockall(), we'll have the calling cpu zeroing
 // and faulting in memory for all shards, which can be very slow on large
 // machines. So we'll call do_mlock_this_shard() on each shard in parallel
@@ -3644,6 +3646,14 @@ void smp::register_network_stacks() {
 // faulting is done.
 static void do_mlock_this_shard() {
     auto layout = memory::get_memory_layout();
+    auto* start = reinterpret_cast<char*>(layout.start);
+    auto* end = reinterpret_cast<char*>(layout.end);
+    auto step = getpagesize();
+    char tmp = 0;
+    for (auto p = start; p < end; p += step) {
+        tmp += *p; // fault in a page
+    }
+    disable_optimization = tmp; // prevent the compiler from optimizing the loop away
     auto r = ::mlock(reinterpret_cast<void*>(layout.start), layout.end - layout.start);
     if (r) {
         // Don't hard fail for now, it's hard to get the configuration right
