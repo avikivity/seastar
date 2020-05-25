@@ -3761,7 +3761,7 @@ void smp::configure(boost::program_options::variables_map configuration, reactor
         mlock = configuration["lock-memory"].as<bool>();
     }
     if (mlock) {
-        auto r = mlockall(MCL_CURRENT | MCL_FUTURE);
+        auto r = mlockall(MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT);
         if (r) {
             // Don't hard fail for now, it's hard to get the configuration right
             fmt::print("warning: failed to mlockall: {}\n", strerror(errno));
