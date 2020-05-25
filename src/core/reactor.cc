@@ -3637,6 +3637,20 @@ void smp::register_network_stacks() {
     register_native_stack();
 }
 
+// If we just mlockall(), we'll have the calling cpu zeroing
+// and faulting in memory for all shards, which can be very slow on large
+// machines. So we'll call do_mlock_this_shard() on each shard in parallel
+// (mlock() is able to fault in parallel) and only call mlockall() once all
+// faulting is done.
+static void do_mlock_this_shard() {
+    auto layout = memory::get_memory_layout();
+    auto r = ::mlock(reinterpret_cast<void*>(layout.start), layout.end - layout.start);
+    if (r) {
+        // Don't hard fail for now, it's hard to get the configuration right
+        fmt::print("warning: failed to mlock: {}\n", strerror(errno));
+    }
+}
+
 void smp::configure(boost::program_options::variables_map configuration, reactor_config reactor_cfg)
 {
 #ifndef SEASTAR_NO_EXCEPTION_HACK
@@ -3756,17 +3770,6 @@ void smp::configure(boost::program_options::variables_map configuration, reactor
     if (configuration.count("hugepages")) {
         hugepages_path = configuration["hugepages"].as<std::string>();
     }
-    auto mlock = false;
-    if (configuration.count("lock-memory")) {
-        mlock = configuration["lock-memory"].as<bool>();
-    }
-    if (mlock) {
-        auto r = mlockall(MCL_CURRENT | MCL_FUTURE);
-        if (r) {
-            // Don't hard fail for now, it's hard to get the configuration right
-            fmt::print("warning: failed to mlockall: {}\n", strerror(errno));
-        }
-    }
 
     rc.cpus = smp::count;
     rc.cpu_set = std::move(cpu_set);
@@ -3848,9 +3851,14 @@ void smp::configure(boost::program_options::variables_map configuration, reactor
     auto backend_selector = configuration["reactor-backend"].as<reactor_backend_selector>();
 
     unsigned i;
+    auto mlock = false;
+    if (configuration.count("lock-memory")) {
+        mlock = configuration["lock-memory"].as<bool>();
+    }
+
     for (i = 1; i < smp::count; i++) {
         auto allocation = allocations[i];
-        create_thread([configuration, &disk_config, hugepages_path, i, allocation, assign_io_queue, alloc_io_queue, thread_affinity, heapprof_enabled, mbind, backend_selector, reactor_cfg] {
+        create_thread([configuration, &disk_config, hugepages_path, i, allocation, assign_io_queue, alloc_io_queue, thread_affinity, heapprof_enabled, mbind, mlock, backend_selector, reactor_cfg] {
           try {
             auto thread_name = seastar::format("reactor-{}", i);
             pthread_setname_np(pthread_self(), thread_name.c_str());
@@ -3880,6 +3888,11 @@ void smp::configure(boost::program_options::variables_map configuration, reactor
             for (auto& dev_id : disk_config.device_ids()) {
                 assign_io_queue(i, dev_id);
             }
+
+            if (mlock) {
+                do_mlock_this_shard();
+            }
+
             inited.wait();
             engine().configure(configuration);
             engine().run();
@@ -3926,9 +3939,23 @@ void smp::configure(boost::program_options::variables_map configuration, reactor
     for (auto& dev_id : disk_config.device_ids()) {
         assign_io_queue(0, dev_id);
     }
+
+    if (mlock) {
+        do_mlock_this_shard();
+    }
+
     inited.wait();
 
     engine().configure(configuration);
+
+    if (mlock) {
+        auto r = mlockall(MCL_CURRENT | MCL_FUTURE);
+        if (r) {
+            // Don't hard fail for now, it's hard to get the configuration right
+            fmt::print("warning: failed to mlockall: {}\n", strerror(errno));
+        }
+    }
+
     // The raw `new` is necessary because of the private constructor of `lowres_clock_impl`.
     engine()._lowres_clock_impl = std::unique_ptr<lowres_clock_impl>(new lowres_clock_impl);
 }
