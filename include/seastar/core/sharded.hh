@@ -108,6 +108,21 @@ public:
     }
 };
 
+SEASTAR_CONCEPT(
+
+template <typename Service, typename Mapper, typename Initial, typename Reduce>
+concept sharded_map_reduce0_constraints
+    = std::invocable<Mapper, Service&>  // can call map(service)
+    && (requires (Service& service, Mapper map, Initial initial, Reduce reduce) {
+            // Can call reduce initial with map(service) (for the case where it does not return a future)
+            { reduce(std::move(initial), map(service)) } -> std::convertible_to<Initial>;
+        } || requires (Service& service, Mapper map, Initial initial, Reduce reduce) {
+            // Can call reduce initial with map(service) (for the case where it returns a future)
+            { reduce(std::move(initial), map(service).get0()) } -> std::convertible_to<Initial>;
+        });
+
+)
+
 /// Template helper to distribute a service across all logical cores.
 ///
 /// The \c sharded template manages a sharded service, by creating
@@ -320,6 +335,7 @@ public:
     /// \return  Result of invoking `map` with each instance in parallel, reduced by calling
     ///          `reduce()` on each adjacent pair of results.
     template <typename Mapper, typename Initial, typename Reduce>
+    SEASTAR_CONCEPT( requires sharded_map_reduce0_constraints<Service, Mapper, Initial, Reduce> )
     inline
     future<Initial>
     map_reduce0(Mapper map, Initial initial, Reduce reduce) {
