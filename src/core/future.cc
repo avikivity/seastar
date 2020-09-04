@@ -158,14 +158,17 @@ void future_state_base::ignore() noexcept {
 }
 
 nested_exception::nested_exception(std::exception_ptr inner, std::exception_ptr outer) noexcept
-    : inner(std::move(inner)), outer(std::move(outer)) {}
+    : _what(fmt::format("{} (while cleaning up after {})", inner, outer)) 
+    , inner(std::move(inner))
+    , outer(std::move(outer)) {
+}
 
 nested_exception::nested_exception(nested_exception&&) noexcept = default;
 
 nested_exception::nested_exception(const nested_exception&) noexcept = default;
 
 const char* nested_exception::what() const noexcept {
-    return "seastar::nested_exception";
+    return _what.c_str();
 }
 
 [[noreturn]] void nested_exception::rethrow_nested() const {

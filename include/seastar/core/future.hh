@@ -42,7 +42,9 @@
 
 namespace seastar {
 
-struct nested_exception : public std::exception {
+class nested_exception : public std::exception {
+    sstring _what;
+public:
     std::exception_ptr inner;
     std::exception_ptr outer;
     nested_exception(std::exception_ptr inner, std::exception_ptr outer) noexcept;

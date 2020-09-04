@@ -201,7 +201,7 @@ SEASTAR_TEST_CASE(test_get_on_promise) {
 }
 
 static void check_finally_exception(const nested_exception& ex) {
-    BOOST_REQUIRE_EQUAL(ex.what(), "seastar::nested_exception");
+    BOOST_REQUIRE_EQUAL(ex.what(), "test_exception (bar) (while cleaning up after test_exception (foo))");
     try {
         std::rethrow_exception(ex.inner);
     } catch (std::runtime_error& inner) {
@@ -214,19 +214,29 @@ static void check_finally_exception(const nested_exception& ex) {
     }
 }
 
+// An exception class with a controlled what() overload
+class test_exception : public std::exception {
+    sstring _what;
+public:
+    explicit test_exception(sstring what) : _what(std::move(what)) {}
+    virtual const char* what() const noexcept override {
+        return _what.c_str();
+    }
+};
+
 SEASTAR_TEST_CASE(test_finally_exception) {
     return make_ready_future<>().then([] {
-        throw std::runtime_error("foo");
+        throw test_exception("foo");
     }).finally([] {
-        throw std::runtime_error("bar");
+        throw test_exception("bar");
     }).handle_exception_type(check_finally_exception);
 }
 
 SEASTAR_TEST_CASE(test_finally_exceptional_future) {
     return make_ready_future<>().then([] {
-        throw std::runtime_error("foo");
+        throw test_exception("foo");
     }).finally([] {
-       return make_exception_future<>(std::runtime_error("bar"));
+       return make_exception_future<>(test_exception("bar"));
     }).handle_exception_type(check_finally_exception);
 }
 
