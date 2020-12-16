@@ -48,6 +48,7 @@ public:
             _promise.set_value(std::forward<U>(value)...);
         }
 
+        [[deprecated("Forwarding corouting returns are deprecated as too dagerous. Use 'co_return co_await ...' until explicit syntax is available.")]]
         void return_value(future<T>&& fut) noexcept {
             fut.forward_to(std::move(_promise));
         }
