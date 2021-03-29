@@ -793,7 +793,8 @@ target_compile_definitions(seastar
 
 function (seastar_supports_flag flag var)
   set (CMAKE_REQUIRED_FLAGS "${flag}")
-  check_cxx_source_compiles ("int main() { return 0; }" tmp_${var})
+  check_cxx_source_compiles ("int main() { return 0; }" tmp_${var}
+    FAIL_REGEX "argument unused during compilation: .*")
   set (${var} ${tmp_${var}} PARENT_SCOPE)
 endfunction ()
 
