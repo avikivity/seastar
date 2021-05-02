@@ -863,7 +863,7 @@ public:
         if (ptr) {
             assert(ptr->_u.st == future_state_base::state::future);
             new (ptr) future_state(std::move(state));
-            make_ready<urgent::yes>();
+            make_ready<urgent::no>();
         }
     }
 

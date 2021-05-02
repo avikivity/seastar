@@ -972,12 +972,20 @@ void reactor::task_queue::queue_fragment::push_front(task* tsk) noexcept {
 }
 
 void reactor::task_queue::fragmented_queue::push_back(task* tsk) noexcept {
-    if (fragments.empty() || fragments.back().is_full()) {
+    auto type_hash_index = uint32_t(reinterpret_cast<uintptr_t>(&typeid(*tsk))) % type_hash_size;
+    auto frag = type_hash[type_hash_index];
+    if (!frag) {
         // Note: we can't survive allocation failure here
         // Note: the fragments list takes ownership of the new queue_fragment
-        fragments.push_back(*new queue_fragment);
+        frag = new queue_fragment(type_hash_index);
+        type_hash[type_hash_index] = frag;
+        fragments.push_back(*frag);
     }
-    fragments.back().push_back(tsk);
+    frag->push_back(tsk);
+    if (frag->is_full()) {
+        type_hash[type_hash_index] = nullptr;
+        frag->type_hash_index = type_hash_size;
+    }
     ++nr_tasks;
 }
 
@@ -2691,6 +2699,7 @@ bool reactor::task_queue::run_tasks() {
         if (internal::scheduler_need_preempt()) {
             if (tasks.size() <= r._cfg.max_task_backlog) {
                 if (frag->start == frag->end) {
+                    tasks.type_hash[frag->type_hash_index] = nullptr;
                     auto tmp = &*frag;
                     frag = tasks.fragments.erase(frag);
                     delete tmp;
@@ -2715,6 +2724,7 @@ bool reactor::task_queue::run_tasks() {
         }
       }
       if (frag != tasks.fragments.end() && frag->start == frag->end) {
+          tasks.type_hash[frag->type_hash_index] = nullptr;
           auto tmp = &*frag;
           frag = tasks.fragments.erase(frag);
           delete tmp;
