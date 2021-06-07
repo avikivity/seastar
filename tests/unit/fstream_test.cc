@@ -47,7 +47,7 @@ namespace fs = std::filesystem;
 struct writer {
     output_stream<char> out;
     static future<shared_ptr<writer>> make(file f) {
-        return api_v3::and_newer::make_file_output_stream(std::move(f)).then([] (output_stream<char>&& os) {
+        return make_file_output_stream(std::move(f)).then([] (output_stream<char>&& os) {
             return make_shared<writer>(writer{std::move(os)});
         });
     }
@@ -227,7 +227,7 @@ future<> test_consume_until_end(uint64_t size) {
     auto filename = (t.get_path() / "testfile.tmp").native();
     return open_file_dma(filename,
             open_flags::rw | open_flags::create | open_flags::truncate).then([size] (file f) {
-          return api_v3::and_newer::make_file_output_stream(f).then([size] (output_stream<char>&& os) {
+          return make_file_output_stream(f).then([size] (output_stream<char>&& os) {
             return do_with(std::move(os), [size] (output_stream<char>& out) {
                 std::vector<char> buf(size);
                 std::iota(buf.begin(), buf.end(), 0);
@@ -292,7 +292,7 @@ SEASTAR_TEST_CASE(test_input_stream_esp_around_eof) {
         auto f = open_file_dma(filename,
                 open_flags::rw | open_flags::create | open_flags::truncate).get0();
         auto close_f = deferred_close(f);
-        auto out = api_v3::and_newer::make_file_output_stream(f).get0();
+        auto out = make_file_output_stream(f).get0();
         out.write(reinterpret_cast<const char*>(data.data()), data.size()).get();
         out.flush().get();
         //out.close().get();  // FIXME: closes underlying stream:?!
@@ -343,7 +343,6 @@ SEASTAR_TEST_CASE(test_input_stream_esp_around_eof) {
     });
 }
 
-#if SEASTAR_API_LEVEL >= 3
 SEASTAR_TEST_CASE(without_api_prefix) {
     return tmp_dir::do_with_thread([](tmp_dir& t) {
         auto filename = (t.get_path() / "testfile.tmp").native();
@@ -353,7 +352,6 @@ SEASTAR_TEST_CASE(without_api_prefix) {
         out.close().get();
     });
 }
-#endif
 
 SEASTAR_TEST_CASE(file_handle_test) {
     return tmp_dir::do_with_thread([] (tmp_dir& t) {
