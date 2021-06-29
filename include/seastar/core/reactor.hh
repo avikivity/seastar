@@ -206,6 +206,7 @@ private:
     class io_queue_submission_pollfn;
     class syscall_pollfn;
     class execution_stage_pollfn;
+    class memory_faulter_pollfn;
     friend class manual_clock;
     friend class file_data_source_impl; // for fstream statistics
     friend class internal::reactor_stall_sampler;
@@ -348,6 +349,7 @@ private:
     lowres_clock::time_point _lowres_next_timeout;
     std::optional<poller> _epoll_poller;
     std::optional<pollable_fd> _aio_eventfd;
+    std::optional<poller> _memory_faulter_poller;
     const bool _reuseport;
     circular_buffer<double> _loads;
     double _load = 0;

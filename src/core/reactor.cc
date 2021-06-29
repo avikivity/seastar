@@ -2686,6 +2686,50 @@ void reactor::service_highres_timer() noexcept {
     });
 }
 
+// Faults in memory if --lock-memory 1 was specified, so that we don't stall on
+// soft page faults that initialize memory.
+class reactor::memory_faulter_pollfn final : public pollfn {
+    static inline std::atomic_flag _lock; // faults are serialized by mmap_sem, so don't do them concurrently
+    reactor& _r;
+    unsigned _page_size = getpagesize();
+    unsigned _rotating_offset = 0;
+    uintptr_t _current_address = align_up<uintptr_t>(memory::get_memory_layout().start, _page_size);
+    uintptr_t _end_address = align_down<uintptr_t>(memory::get_memory_layout().end, _page_size);
+    static inline constexpr size_t _mem_per_iteration = 1 << 20; // at 16GB/s, this translates to 0.06ms.
+public:
+    explicit memory_faulter_pollfn(reactor& r) : _r(r) {}
+    virtual bool poll() override {
+        if (_r._stopping || _current_address >= _end_address) {
+            _r._memory_faulter_poller.reset(); // Safe, it will delete this pollfn later
+            return true; // We added a task for deregistering the poller
+        }
+        if (_lock.test_and_set(std::memory_order_relaxed)) {
+            // Let lock holder make progress
+            return true;
+        }
+        auto end = std::min(_current_address + _mem_per_iteration, _end_address);
+        while (_current_address < end) {
+            auto addr = _current_address + _rotating_offset;
+            // Use a do-nothing write to make sure we don't fault in the zero page
+            reinterpret_cast<std::atomic<unsigned>*>(addr)->fetch_add(0, std::memory_order_relaxed);
+            _current_address += _page_size;
+            // Avoid touching the same offset within page, causes cache line contention
+            _rotating_offset = (_rotating_offset + 64) & ~_page_size;
+        }
+        _lock.clear(std::memory_order_relaxed);
+        return true;
+    }
+    virtual bool pure_poll() override {
+        return _current_address < _end_address;
+    }
+    virtual bool try_enter_interrupt_mode() override {
+        return true;
+    }
+    virtual void exit_interrupt_mode() override {
+    }
+    friend class reactor;
+};
+
 int reactor::run() {
 #ifndef SEASTAR_ASAN_ENABLED
     // SIGSTKSZ is too small when using asan. We also don't need to
@@ -2724,6 +2768,12 @@ int reactor::run() {
 
     poller batch_flush_poller(std::make_unique<batch_flush_pollfn>(*this));
     poller execution_stage_poller(std::make_unique<execution_stage_pollfn>());
+
+    if (_cfg.fault_memory_in_gently) {
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
+        _memory_faulter_poller = poller(std::make_unique<memory_faulter_pollfn>(*this));
+#endif
+    }
 
     start_aio_eventfd_loop();
 
@@ -3831,6 +3881,7 @@ void smp::configure(boost::program_options::variables_map configuration, reactor
         // multiple shards fault in memory at once, but if that work can be
         // in parallel to regular reactor work on other shards.
         extra_flags |= MCL_ONFAULT; // Linux 4.4+
+        reactor_cfg.fault_memory_in_gently = true;
 #endif
         auto r = mlockall(MCL_CURRENT | MCL_FUTURE | extra_flags);
         if (r) {

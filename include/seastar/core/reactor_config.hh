@@ -42,6 +42,14 @@ struct reactor_config {
     /// You can adjust the behavior of SIGINT/SIGTERM by installing signal handlers
     /// via reactor::handle_signal().
     bool auto_handle_sigint_sigterm = true;  ///< automatically terminate on SIGINT/SIGTERM
+
+
+    /// \brief Attempt to fault memory in concurrently with application startup
+    ///
+    /// When the program starts, touch all memory in order to fault it in. This can prevent
+    /// latency spikes on large machines when the kernel has to do more work in order to fault
+    /// in pages concurrently.
+    bool fault_memory_in_gently = false;
 };
 
 }
