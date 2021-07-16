@@ -21,6 +21,7 @@
 
 #include <seastar/core/future-util.hh>
 #include <seastar/testing/test_case.hh>
+#include <seastar/coroutine/all.hh>
 
 using namespace seastar;
 
@@ -170,4 +171,14 @@ SEASTAR_TEST_CASE(test_preemption) {
     BOOST_REQUIRE(save_x);
     co_return;
 }
+
+SEASTAR_TEST_CASE(test_all_simple) {
+    auto [a, b] = co_await coroutine::all(
+        [] { return make_ready_future<int>(1); },
+        [] { return make_ready_future<int>(2); }
+    );
+    BOOST_REQUIRE_EQUAL(a, 1);
+    BOOST_REQUIRE_EQUAL(b, 2);
+}
+
 #endif

@@ -395,6 +395,39 @@ static constexpr bool is_tuple_effectively_trivially_move_constructible_and_dest
 
 }
 
+class delayed_destructor_exception_ptr {
+    struct exception_ptr_holder {
+        exception_ptr_holder* next;
+        std::exception_ptr e;
+    };
+    exception_ptr_holder* _e = nullptr;
+    static inline thread_local exception_ptr_holder* s_awaiting_destruction = nullptr;
+    static exception_ptr_holder init_s_bad_alloc_holder() { return {&s_bad_alloc_holder, {}}; }
+    static inline exception_ptr_holder s_bad_alloc_holder = init_s_bad_alloc_holder();
+private:
+    static exception_ptr_holder* make_copy(std::exception_ptr&& e) noexcept {
+        try {
+            return new exception_ptr_holder{nullptr, std::move(e)};
+        } catch (...) {
+            return &s_bad_alloc_holder;
+        }
+    }
+public:
+    delayed_destructor_exception_ptr(std::exception_ptr&& e) noexcept
+            : _e(make_copy(std::move(e))) {}
+    ~delayed_destructor_exception_ptr() {
+        if (__builtin_expect(_e && _e->next != nullptr, false)) {
+            _e->next = s_awaiting_destruction;
+            s_awaiting_destruction = _e->next;
+        }
+    }
+    delayed_destructor_exception_ptr(delayed_destructor_exception_ptr&& x) noexcept : _e(std::exchange(x._e, nullptr)) {}
+    delayed_destructor_exception_ptr& operator=(delayed_destructor_exception_ptr&& x) noexcept {
+        std::swap(_e, x._e);
+        return *this;
+    }
+};
+
 //
 // A future/promise pair maintain one logical value (a future_state).
 // There are up to three places that can store it, but only one is
