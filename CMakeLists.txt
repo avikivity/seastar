@@ -738,6 +738,7 @@ target_link_libraries (seastar
     cryptopp::cryptopp
     fmt::fmt
     lz4::lz4
+    URING::uring
   PRIVATE
     ${CMAKE_DL_LIBS}
     GnuTLS::gnutls
@@ -1249,6 +1250,7 @@ if (Seastar_INSTALL)
       ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Findrt.cmake
       ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Findyaml-cpp.cmake
       ${CMAKE_CURRENT_SOURCE_DIR}/cmake/SeastarDependencies.cmake
+      ${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindUring.cmake
     DESTINATION ${install_cmakedir})
 
   install (

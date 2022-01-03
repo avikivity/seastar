@@ -58,6 +58,7 @@ macro (seastar_find_dependencies)
     # Private and private/public dependencies.
     Concepts
     GnuTLS
+    LibUring
     LinuxMembarrier
     Sanitizers
     StdAtomic
