@@ -800,7 +800,13 @@ if (MaybeUninitialized_FOUND)
       # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=88897.  We disable
       # -Wmaybe-uninitialized in here since otherwise we would have to
       # disable it on many types used inside optional<>.
-      -Wno-maybe-uninitialized)
+      -Wno-maybe-uninitialized
+      -Wno-stringop-overread # false positives with gcc 12
+      -Wno-uninitialized  # false positives with gcc 12,
+      -Wno-missing-attributes # something in seastar's memory.cc, TBD,
+      -Wno-use-after-free # false positives with gcc 12
+      -Wno-dangling-pointer # false positives with gcc 12
+      )
 endif ()
 
 if (Seastar_SSTRING)
