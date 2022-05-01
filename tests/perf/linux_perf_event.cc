@@ -31,6 +31,8 @@
 #include <sys/ioctl.h>
 #include <asm/unistd.h>
 
+namespace seastar::testing {
+
 linux_perf_event::linux_perf_event(const struct ::perf_event_attr& attr, pid_t pid, int cpu, int group_fd, unsigned long flags) {
     int ret = syscall(__NR_perf_event_open, &attr, pid, cpu, group_fd, flags);
     if (ret != -1) {
@@ -91,4 +93,6 @@ linux_perf_event::user_instructions_retired() {
             .exclude_kernel = 1,
             .exclude_hv = 1,
             }, 0, -1, -1, 0);
+}
+
 }

@@ -73,7 +73,7 @@ public:
     perf_stats& operator+=(perf_stats b);
     perf_stats& operator-=(perf_stats b);
 
-    static perf_stats snapshot(linux_perf_event* instructions_retired_counter = nullptr);
+    static perf_stats snapshot(seastar::testing::linux_perf_event* instructions_retired_counter = nullptr);
 };
 
 inline
@@ -115,7 +115,7 @@ class performance_test {
     uint64_t _single_run_iterations = 0;
     std::atomic<uint64_t> _max_single_run_iterations;
 protected:
-    linux_perf_event _instructions_retired_counter = linux_perf_event::user_instructions_retired();
+    seastar::testing::linux_perf_event _instructions_retired_counter = seastar::testing::linux_perf_event::user_instructions_retired();
 private:
     void do_run(const config&);
 public:
@@ -169,7 +169,7 @@ class time_measurement {
 
 public:
     [[gnu::always_inline]] [[gnu::hot]]
-    void start_run(linux_perf_event* instructions_retired_counter = nullptr) {
+    void start_run(seastar::testing::linux_perf_event* instructions_retired_counter = nullptr) {
         _total_time = { };
         auto t = clock_type::now();
         _run_start_time = t;
@@ -178,7 +178,7 @@ public:
     }
 
     [[gnu::always_inline]] [[gnu::hot]]
-    performance_test::run_result stop_run(linux_perf_event* instructions_retired_counter = nullptr) {
+    performance_test::run_result stop_run(seastar::testing::linux_perf_event* instructions_retired_counter = nullptr) {
         auto t = clock_type::now();
         performance_test::run_result ret;
         if (_start_time == _run_start_time) {
@@ -193,13 +193,13 @@ public:
     }
 
     [[gnu::always_inline]] [[gnu::hot]]
-    void start_iteration(linux_perf_event* instructions_retired_counter = nullptr) {
+    void start_iteration(seastar::testing::linux_perf_event* instructions_retired_counter = nullptr) {
         _start_time = clock_type::now();
         _start_stats = perf_stats::snapshot(instructions_retired_counter);
     }
 
     [[gnu::always_inline]] [[gnu::hot]]
-    void stop_iteration(linux_perf_event* instructions_retired_counter = nullptr) {
+    void stop_iteration(seastar::testing::linux_perf_event* instructions_retired_counter = nullptr) {
         auto t = clock_type::now();
         _total_time += t - _start_time;
         auto stats = perf_stats::snapshot(instructions_retired_counter);

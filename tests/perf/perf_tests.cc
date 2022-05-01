@@ -44,6 +44,8 @@
 namespace perf_tests {
 namespace internal {
 
+using namespace seastar::testing;
+
 namespace {
 
 // We need to use signal-based timer instead of seastar ones so that

@@ -33,6 +33,8 @@
 
 struct perf_event_attr; // from <linux/perf_event.h>
 
+namespace seastar::testing {
+
 class linux_perf_event {
     int _fd = -1;
 public:
@@ -47,3 +49,4 @@ public:
     static linux_perf_event user_instructions_retired();
 };
 
+}
