@@ -1392,6 +1392,10 @@ public:
             , _preempt_io_context(_r, _r._task_quota_timer, _hrtimer_timerfd)
             , _hrtimer_completion(_r, _hrtimer_timerfd)
             , _smp_wakeup_completion(_r._notify_eventfd) {
+        // Protect against spurious wakeups - if we get notified that the timer has
+        // expired when it really hasn't, we don't want to block in read(tfd, ...).
+        auto tfd = _r._task_quota_timer.get();
+        ::fcntl(tfd, F_SETFL, ::fcntl(tfd, F_GETFL) | O_NONBLOCK);
     }
     ~reactor_backend_uring() {
         ::io_uring_queue_exit(&_uring);
@@ -1404,6 +1408,8 @@ public:
         did_work |= _preempt_io_context.service_preempting_io();
         queue_pending_file_io();
         did_work |= ::io_uring_submit(&_uring);
+        // io_uring_submit() may have kicked up queued work
+        did_work |= reap_kernel_completions();
         return did_work;
     }
     virtual bool kernel_events_can_sleep() const override {
