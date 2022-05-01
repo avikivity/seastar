@@ -302,25 +302,17 @@ public:
         }
     }
     lw_shared_ptr& operator=(const lw_shared_ptr& x) noexcept {
-        if (_p != x._p) {
-            this->~lw_shared_ptr();
-            new (this) lw_shared_ptr(x);
-        }
-        return *this;
+        return operator=(lw_shared_ptr(x));
     }
     lw_shared_ptr& operator=(lw_shared_ptr&& x) noexcept {
-        if (_p != x._p) {
-            this->~lw_shared_ptr();
-            new (this) lw_shared_ptr(std::move(x));
-        }
+        std::swap(_p, x._p);
         return *this;
     }
     lw_shared_ptr& operator=(std::nullptr_t) noexcept {
         return *this = lw_shared_ptr();
     }
     lw_shared_ptr& operator=(T&& x) noexcept {
-        this->~lw_shared_ptr();
-        new (this) lw_shared_ptr(make_lw_shared<T>(std::move(x)));
+        *this = lw_shared_ptr(make_lw_shared<T>(std::move(x)));
         return *this;
     }
 
@@ -538,17 +530,11 @@ public:
         }
     }
     shared_ptr& operator=(const shared_ptr& x) noexcept {
-        if (this != &x) {
-            this->~shared_ptr();
-            new (this) shared_ptr(x);
-        }
-        return *this;
+        return operator=(shared_ptr(x));
     }
     shared_ptr& operator=(shared_ptr&& x) noexcept {
-        if (this != &x) {
-            this->~shared_ptr();
-            new (this) shared_ptr(std::move(x));
-        }
+        std::swap(_b, x._b);
+        std::swap(_p, x._p);
         return *this;
     }
     shared_ptr& operator=(std::nullptr_t) noexcept {
@@ -556,19 +542,11 @@ public:
     }
     template <typename U, typename = std::enable_if_t<std::is_base_of<T, U>::value>>
     shared_ptr& operator=(const shared_ptr<U>& x) noexcept {
-        if (*this != x) {
-            this->~shared_ptr();
-            new (this) shared_ptr(x);
-        }
-        return *this;
+        return operator=(shared_ptr(x));
     }
     template <typename U, typename = std::enable_if_t<std::is_base_of<T, U>::value>>
     shared_ptr& operator=(shared_ptr<U>&& x) noexcept {
-        if (*this != x) {
-            this->~shared_ptr();
-            new (this) shared_ptr(std::move(x));
-        }
-        return *this;
+        return operator=(shared_ptr(std::move(x)));
     }
     explicit operator bool() const noexcept {
         return _p;
