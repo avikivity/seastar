@@ -1749,17 +1749,21 @@ reactor::open_file_dma(std::string_view nameref, open_flags flags, file_open_opt
             }
             if (fd != -1) {
                 fsxattr attr = {};
+                int r = ::ioctl(fd, XFS_IOC_FSGETXATTR, &attr);
                 // xfs delayed allocation is disabled when extent size hints are present.
                 // This causes tons of xfs log fsyncs. Given that extent size hints are
                 // unneeded when delayed allocation is available (which is the case
                 // when not using O_DIRECT), disable them.
-                if (options.extent_allocation_size_hint && !_kernel_page_cache) {
+                //
+                // Ignore error; may be !xfs, and just a hint anyway
+                if (r != -1 && options.extent_allocation_size_hint && !_kernel_page_cache) {
                     attr.fsx_xflags |= XFS_XFLAG_EXTSIZE;
                     attr.fsx_extsize = std::min(options.extent_allocation_size_hint,
                                         file_open_options::max_extent_allocation_size_hint);
+
+                    // Ignore error; may be !xfs, and just a hint anyway
+                    ::ioctl(fd, XFS_IOC_FSSETXATTR, &attr);
                 }
-                // Ignore error; may be !xfs, and just a hint anyway
-                ::ioctl(fd, XFS_IOC_FSSETXATTR, &attr);
             }
             return wrap_syscall<int>(fd);
         }).then([&options, name = std::move(name), &open_flags] (syscall_result<int> sr) {
