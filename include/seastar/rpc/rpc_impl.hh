@@ -37,7 +37,7 @@ namespace seastar {
 
 extern logger seastar_logger;
 
-void dump_task_log();
+void dump_task_log(std::chrono::high_resolution_clock::time_point since);
 
 namespace rpc {
 
@@ -606,7 +606,7 @@ auto recv_helper(signature<Ret (InArgs...)> sig, Func&& func, WantClientInfo wci
                                 seastar_logger.info("rx {} {} delta {} us txtime {}", std::get<0>(args), std::get<1>(args), delta / std::chrono::microseconds(1), sender_time.time_since_epoch().count());
                             }
                             if (delta > std::chrono::milliseconds(15)) {
-                                dump_task_log();
+                                dump_task_log(before_wait_time - delta);
                             }
                         }
                         return apply(func, client->info(), timeout, WantClientInfo(), WantTimePoint(), signature(), std::move(args)).then_wrapped([client, timeout, msg_id, permit = std::move(permit)] (futurize_t<Ret> ret) mutable {

@@ -178,7 +178,7 @@ class disk_config_params;
 
 struct task_log_entry;
 
-void dump_task_log();
+void dump_task_log(std::chrono::high_resolution_clock::time_point since);
 
 class io_completion : public kernel_completion {
 public:

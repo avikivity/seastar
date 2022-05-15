@@ -150,25 +150,27 @@ struct task_log_entry {
 
 struct task_log {
     uint32_t head = 0;
-    static constexpr uint32_t task_log_size = 1024;
+    static constexpr uint32_t task_log_size = 1024 * 1024;
     task_log_entry log[task_log_size];
 };
 
-static thread_local task_log this_thread_task_log;
+static thread_local std::unique_ptr<task_log> this_thread_task_log = std::make_unique<task_log>();
 
-void dump_task_log() {
-    auto& l = this_thread_task_log;
+void dump_task_log(std::chrono::high_resolution_clock::time_point since) {
+    using namespace std::chrono_literals;
+    auto now = std::chrono::high_resolution_clock::now();
+    auto& l = *this_thread_task_log;
     for (unsigned i = 0; i != l.task_log_size; ++i) {
         auto& e = l.log[(l.head + i) % l.task_log_size];
-        if (!e.task_type) {
+        if (!e.task_type || e.exec_time < since) {
             continue;
         }
-        seastar_logger.info("task log entry: task {} time {} tq {}", fmt::ptr(e.task_type), e.exec_time.time_since_epoch().count(), e.tq->_name);
+        seastar_logger.info("task log entry: task {} time {} tq {} delta {} us", fmt::ptr(e.task_type), e.exec_time.time_since_epoch().count(), e.tq->_name, (now - e.exec_time) / 1us);
     }
 }
 
 void reactor::add_task_log_entry(reactor::task_queue* tq, const task* tsk) {
-    auto& l = this_thread_task_log;
+    auto& l = *this_thread_task_log;
     auto& e = l.log[l.head++];
     l.head = l.head % l.task_log_size;
     e = task_log_entry{.task_type = &typeid(*tsk), .tq = tq, .exec_time = std::chrono::high_resolution_clock::now()};
