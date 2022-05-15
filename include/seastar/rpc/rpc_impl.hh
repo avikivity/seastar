@@ -31,7 +31,11 @@
 #include <seastar/net/packet-data-source.hh>
 #include <seastar/core/print.hh>
 
+namespace utils { class UUID; }
+
 namespace seastar {
+
+extern logger seastar_logger;
 
 namespace rpc {
 
@@ -590,6 +594,15 @@ auto recv_helper(signature<Ret (InArgs...)> sig, Func&& func, WantClientInfo wci
                 (void)try_with_gate(client->get_server().reply_gate(), [client, timeout, msg_id, data = std::move(data), permit = std::move(permit), &func] () mutable {
                     try {
                         auto args = unmarshall<Serializer, InArgs...>(*client, std::move(data));
+                        using perf_test_args_t = std::tuple<sstring, utils::UUID, std::vector<int8_t>, std::chrono::high_resolution_clock::time_point>;
+                        if constexpr (std::same_as<std::tuple<InArgs...>, perf_test_args_t>) {
+                            auto unmarshall_time = std::chrono::high_resolution_clock::now();
+                            auto sender_time = std::get<3>(args);
+                            auto delta = unmarshall_time - sender_time;
+                            if (delta > std::chrono::milliseconds(3)) {
+                                seastar_logger.info("rx {} {} delta {} us", std::get<0>(args), std::get<1>(args), delta / std::chrono::microseconds(1));
+                            }
+                        }
                         return apply(func, client->info(), timeout, WantClientInfo(), WantTimePoint(), signature(), std::move(args)).then_wrapped([client, timeout, msg_id, permit = std::move(permit)] (futurize_t<Ret> ret) mutable {
                             return reply<Serializer>(wait_style(), std::move(ret), msg_id, client, timeout).handle_exception([permit = std::move(permit), client, msg_id] (std::exception_ptr eptr) {
                                 client->get_logger()(client->info(), msg_id, format("got exception while processing a message: {}", eptr));
