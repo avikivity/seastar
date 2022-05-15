@@ -1024,7 +1024,7 @@ bool cpu_pages::initialize() {
     if (r == MAP_FAILED) {
         abort();
     }
-    ::madvise(base, size, MADV_HUGEPAGE);
+    //::madvise(base, size, MADV_HUGEPAGE);
     pages = reinterpret_cast<page*>(base);
     memory = base;
     nr_pages = size / page_size;
@@ -1086,7 +1086,7 @@ void cpu_pages::do_resize(size_t new_size, allocate_system_memory_fn alloc_sys_m
     auto mmap_size = new_size - old_size;
     auto mem = alloc_sys_mem(mmap_start, mmap_size);
     mem.release();
-    ::madvise(mmap_start, mmap_size, MADV_HUGEPAGE);
+    //::madvise(mmap_start, mmap_size, MADV_HUGEPAGE);
     // one past last page structure is a sentinel
     auto new_page_array_pages = align_up(sizeof(page[new_pages + 1]), page_size) / page_size;
     auto new_page_array
