@@ -2748,8 +2748,9 @@ reactor::run_some_tasks() {
     sched_clock::time_point t_run_completed = now();
     STAP_PROBE(seastar, reactor_run_tasks_start);
     _cpu_stall_detector->start_task_run(t_run_completed);
+    sched_clock::time_point t_run_started;
     do {
-        auto t_run_started = t_run_completed;
+        t_run_started = t_run_completed;
         insert_activating_task_queues();
         task_queue* tq = pop_active_task_queue(t_run_started);
         sched_print("running tq {} {}", (void*)tq, tq->_name);
@@ -2769,6 +2770,10 @@ reactor::run_some_tasks() {
             tq->_active = false;
         }
     } while (have_more_tasks() && !need_preempt());
+    auto delta = t_run_completed - t_run_started;
+    if (delta > 1ms) {
+        seastar_logger.info("reactor run took {} usec", delta / 1us);
+    }
     _cpu_stall_detector->end_task_run(t_run_completed);
     STAP_PROBE(seastar, reactor_run_tasks_end);
     *internal::current_scheduling_group_ptr() = default_scheduling_group(); // Prevent inheritance from last group run
