@@ -601,7 +601,7 @@ auto recv_helper(signature<Ret (InArgs...)> sig, Func&& func, WantClientInfo wci
                             auto sender_time = std::get<3>(args);
                             auto delta = before_wait_time - sender_time;
                             if (delta > std::chrono::milliseconds(3)) {
-                                seastar_logger.info("rx {} {} delta {} us", std::get<0>(args), std::get<1>(args), delta / std::chrono::microseconds(1));
+                                seastar_logger.info("rx {} {} delta {} us txtime {}", std::get<0>(args), std::get<1>(args), delta / std::chrono::microseconds(1), sender_time.time_since_epoch().count());
                             }
                         }
                         return apply(func, client->info(), timeout, WantClientInfo(), WantTimePoint(), signature(), std::move(args)).then_wrapped([client, timeout, msg_id, permit = std::move(permit)] (futurize_t<Ret> ret) mutable {
