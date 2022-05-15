@@ -176,6 +176,10 @@ class io_queue;
 class io_intent;
 class disk_config_params;
 
+struct task_log_entry;
+
+void dump_task_log();
+
 class io_completion : public kernel_completion {
 public:
     virtual void complete_with(ssize_t res) final override;
@@ -185,6 +189,8 @@ public:
 };
 
 class reactor {
+    friend struct task_log_entry;
+    friend void dump_task_log();
 private:
     struct task_queue;
     using task_queue_list = circular_buffer_fixed_capacity<task_queue*, 1 << log2ceil(max_scheduling_groups())>;
@@ -647,6 +653,9 @@ private:
     void replace_poller(pollfn* old, pollfn* neww);
     void register_metrics();
     future<> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
+
+    void add_task_log_entry(reactor::task_queue* tq, const task* tsk);
+
 
     future<> fdatasync(int fd) noexcept;
 

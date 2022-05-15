@@ -37,6 +37,8 @@ namespace seastar {
 
 extern logger seastar_logger;
 
+void dump_task_log();
+
 namespace rpc {
 
 enum class exception_type : uint32_t {
@@ -602,6 +604,9 @@ auto recv_helper(signature<Ret (InArgs...)> sig, Func&& func, WantClientInfo wci
                             auto delta = before_wait_time - sender_time;
                             if (delta > std::chrono::milliseconds(3)) {
                                 seastar_logger.info("rx {} {} delta {} us txtime {}", std::get<0>(args), std::get<1>(args), delta / std::chrono::microseconds(1), sender_time.time_since_epoch().count());
+                            }
+                            if (delta > std::chrono::milliseconds(15)) {
+                                dump_task_log();
                             }
                         }
                         return apply(func, client->info(), timeout, WantClientInfo(), WantTimePoint(), signature(), std::move(args)).then_wrapped([client, timeout, msg_id, permit = std::move(permit)] (futurize_t<Ret> ret) mutable {

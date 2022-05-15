@@ -142,6 +142,38 @@
 
 namespace seastar {
 
+struct task_log_entry {
+    const std::type_info* task_type = nullptr;
+    const reactor::task_queue* tq = nullptr;
+    std::chrono::high_resolution_clock::time_point exec_time;
+};
+
+struct task_log {
+    uint32_t head = 0;
+    static constexpr uint32_t task_log_size = 1024;
+    task_log_entry log[task_log_size];
+};
+
+static thread_local task_log this_thread_task_log;
+
+void dump_task_log() {
+    auto& l = this_thread_task_log;
+    for (unsigned i = 0; i != l.task_log_size; ++i) {
+        auto& e = l.log[(l.head + i) % l.task_log_size];
+        if (!e.task_type) {
+            continue;
+        }
+        seastar_logger.info("task log entry: task {} time {} tq {}", fmt::ptr(e.task_type), e.exec_time.time_since_epoch().count(), e.tq->_name);
+    }
+}
+
+void reactor::add_task_log_entry(reactor::task_queue* tq, const task* tsk) {
+    auto& l = this_thread_task_log;
+    auto& e = l.log[l.head++];
+    l.head = l.head % l.task_log_size;
+    e = task_log_entry{.task_type = &typeid(*tsk), .tq = tq, .exec_time = std::chrono::high_resolution_clock::now()};
+}
+
 struct mountpoint_params {
     std::string mountpoint = "none";
     uint64_t read_bytes_rate = std::numeric_limits<uint64_t>::max();
@@ -2345,6 +2377,7 @@ void reactor::run_tasks(task_queue& tq) {
         STAP_PROBE(seastar, reactor_run_tasks_single_start);
         task_histogram_add_task(*tsk);
         _current_task = tsk;
+        add_task_log_entry(&tq, tsk);
         tsk->run_and_dispose();
         _current_task = nullptr;
         STAP_PROBE(seastar, reactor_run_tasks_single_end);
