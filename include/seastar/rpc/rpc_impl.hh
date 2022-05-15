@@ -588,17 +588,18 @@ auto recv_helper(signature<Ret (InArgs...)> sig, Func&& func, WantClientInfo wci
             }).handle_exception_type([] (gate_closed_exception&) {/* ignore */});
             return make_ready_future();
         }
+        auto before_wait_time = std::chrono::high_resolution_clock::now();
         // note: apply is executed asynchronously with regards to networking so we cannot chain futures here by doing "return apply()"
-        auto f = client->wait_for_resources(memory_consumed, timeout).then([client, timeout, msg_id, data = std::move(data), &func] (auto permit) mutable {
+        auto f = client->wait_for_resources(memory_consumed, timeout).then([client, timeout, msg_id, data = std::move(data), &func, before_wait_time] (auto permit) mutable {
                 // FIXME: future is discarded
-                (void)try_with_gate(client->get_server().reply_gate(), [client, timeout, msg_id, data = std::move(data), permit = std::move(permit), &func] () mutable {
+                (void)try_with_gate(client->get_server().reply_gate(), [client, timeout, msg_id, data = std::move(data), permit = std::move(permit), &func, before_wait_time] () mutable {
                     try {
                         auto args = unmarshall<Serializer, InArgs...>(*client, std::move(data));
                         using perf_test_args_t = std::tuple<sstring, utils::UUID, std::vector<int8_t>, std::chrono::high_resolution_clock::time_point>;
                         if constexpr (std::same_as<std::tuple<InArgs...>, perf_test_args_t>) {
-                            auto unmarshall_time = std::chrono::high_resolution_clock::now();
+                            //auto unmarshall_time = std::chrono::high_resolution_clock::now();
                             auto sender_time = std::get<3>(args);
-                            auto delta = unmarshall_time - sender_time;
+                            auto delta = before_wait_time - sender_time;
                             if (delta > std::chrono::milliseconds(3)) {
                                 seastar_logger.info("rx {} {} delta {} us", std::get<0>(args), std::get<1>(args), delta / std::chrono::microseconds(1));
                             }
