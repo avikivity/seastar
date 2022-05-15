@@ -323,6 +323,7 @@ private:
         sched_clock::duration _time_spent_on_task_quota_violations = {};
         seastar::metrics::metric_groups _metrics;
         void rename(sstring new_name);
+        std::chrono::time_point<std::chrono::steady_clock> _last_run = std::chrono::time_point<std::chrono::steady_clock>::max();
     private:
         void register_stats();
     };

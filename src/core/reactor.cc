@@ -2754,6 +2754,10 @@ reactor::run_some_tasks() {
         insert_activating_task_queues();
         task_queue* tq = pop_active_task_queue(t_run_started);
         sched_print("running tq {} {}", (void*)tq, tq->_name);
+        auto sched_delay = t_run_started - tq->_last_run;
+        if (sched_delay  > 3ms) {
+            seastar_logger.warn("sched delay {} us tq {}", sched_delay / 1us, tq->_name);
+        }
         tq->_current = true;
         _last_vruntime = std::max(tq->_vruntime, _last_vruntime);
         run_tasks(*tq);
@@ -2764,6 +2768,7 @@ reactor::run_some_tasks() {
         sched_print("run complete ({} {}); time consumed {} usec; final vruntime {} empty {}",
                 (void*)tq, tq->_name, delta / 1us, tq->_vruntime, tq->_q.empty());
         tq->_ts = t_run_completed;
+        tq->_last_run = t_run_completed;
         if (!tq->_q.empty()) {
             insert_active_task_queue(tq);
         } else {
