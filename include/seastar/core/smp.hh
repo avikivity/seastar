@@ -480,7 +480,7 @@ private:
     void create_thread(std::function<void ()> thread_loop);
     unsigned adjust_max_networking_aio_io_control_blocks(unsigned network_iocbs);
 public:
-    static unsigned count;
+    static inline thread_local unsigned count = 0;
 };
 
 SEASTAR_MODULE_EXPORT_END

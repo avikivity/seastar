@@ -3951,7 +3951,6 @@ thread_local std::unique_ptr<reactor, reactor_deleter> reactor_holder;
 
 thread_local smp_message_queue** smp::_qs;
 thread_local std::thread::id smp::_tmain;
-unsigned smp::count = 0;
 
 void smp::start_all_queues()
 {
@@ -4523,10 +4522,11 @@ void smp::configure(const smp_options& smp_opts, const reactor_options& reactor_
     auto smp_tmain = smp::_tmain;
     for (i = 1; i < smp::count; i++) {
         auto allocation = allocations[i];
-        create_thread([this, smp_tmain, inited, &reactors_registered, &smp_queues_constructed, &smp_opts, &reactor_opts, &reactors, hugepages_path, i, allocation, assign_io_queues, alloc_io_queues, thread_affinity, heapprof_sampling_rate, mbind, backend_selector, reactor_cfg, &mtx, &layout, use_transparent_hugepages] {
+        create_thread([this, smp_tmain, inited, &reactors_registered, &smp_queues_constructed, &smp_opts, &reactor_opts, &reactors, hugepages_path, i, allocation, assign_io_queues, alloc_io_queues, thread_affinity, heapprof_sampling_rate, mbind, backend_selector, reactor_cfg, &mtx, &layout, use_transparent_hugepages, smp_count = smp::count] {
           try {
             // initialize thread_locals that are equal across all reacto threads of this smp instance
             smp::_tmain = smp_tmain;
+            smp::count = smp_count;
             auto thread_name = fmt::format("reactor-{}", i);
             pthread_setname_np(pthread_self(), thread_name.c_str());
             if (thread_affinity) {

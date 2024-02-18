@@ -46,11 +46,13 @@ int main(int argc, char** argv)
     int engine_ready_fd = eventfd(0, 0);
     auto alien_done = file_desc::eventfd(0, 0);
     seastar::app_template app;
+    unsigned smp_count = 0;
 
     // use the raw fd, because seastar engine want to take over the fds, if it
     // polls on them.
     auto zim = std::async([&app, engine_ready_fd,
-                           alien_done=alien_done.get()] {
+                           alien_done=alien_done.get(),
+                           &smp_count] {
         eventfd_t result = 0;
         // wait until the seastar engine is ready
         int r = ::eventfd_read(engine_ready_fd, &result);
@@ -68,7 +70,7 @@ int main(int argc, char** argv)
         });
         // test for alien::submit_to(), which returns a std::future<int>
         std::vector<std::future<int>> counts;
-        for (auto i : boost::irange(0u, smp::count)) {
+        for (auto i : boost::irange(0u, smp_count)) {
             // send messages from alien.
             counts.push_back(alien::submit_to(app.alien(), i, [i] {
                 return seastar::make_ready_future<int>(i);
@@ -89,8 +91,9 @@ int main(int argc, char** argv)
 
     eventfd_t result = 0;
     app.run(argc, argv, [&] {
-        return seastar::now().then([engine_ready_fd] {
+        return seastar::now().then([engine_ready_fd, &smp_count] {
             // engine ready!
+            smp_count = smp::count; // alien thread is waiting for this to be populated.
             ::eventfd_write(engine_ready_fd, ENGINE_READY);
             return seastar::now();
         }).then([alien_done = std::move(alien_done), &result]() mutable {
@@ -120,7 +123,7 @@ int main(int argc, char** argv)
         std::cerr << "Bad everything: " << everything << " != " << expected << std::endl;
         return 1;
     }
-    const auto shards = boost::irange(0u, smp::count);
+    const auto shards = boost::irange(0u, smp_count);
     auto expected = std::accumulate(std::begin(shards), std::end(shards), 0);
     if (total != expected) {
         std::cerr << "Bad total: " << total << " != " << expected << std::endl;
