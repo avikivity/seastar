@@ -1026,3 +1026,20 @@ SEASTAR_TEST_CASE(test_lambda_value_capture_continuation) {
 
 
 #endif
+
+SEASTAR_TEST_CASE(test_coroutines_allocation_elided) {
+    auto stats1 = seastar::memory::stats();
+    co_await [] () -> future<> {
+        // Prevent the whole thing from being optimized away even without coro_await_elidable
+        co_await make_ready_future<>();
+        co_return;
+    }();
+    auto stats2 = seastar::memory::stats();
+    auto diff = stats2.mallocs() - stats1.mallocs();
+#if __has_cpp_attribute(clang::coro_await_elidable) && __has_cpp_attribute(clang::coro_await_elidable_argument)
+    auto expected = 0;
+#else
+    auto expected = 1;
+#endif
+    BOOST_REQUIRE_EQUAL(diff, size_t(expected));
+}
