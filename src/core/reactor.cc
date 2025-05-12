@@ -4273,10 +4273,16 @@ void smp::configure(const smp_options& smp_opts, const reactor_options& reactor_
     }
 
     if (smp_opts.smp) {
-        smp::count = smp_opts.smp.get_value();
+        _shard_count = smp_opts.smp.get_value();
     } else {
-        smp::count = cpu_set.size();
+        _shard_count = cpu_set.size();
     }
+
+    // For compatiblity, set smp::count, but don't warn about it.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    smp::count = _shard_count;
+#pragma GCC diagnostic pop
     std::vector<reactor*> reactors(smp::count);
     if (smp_opts.memory) {
 #ifdef SEASTAR_DEFAULT_ALLOCATOR

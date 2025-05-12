@@ -314,6 +314,7 @@ struct smp_options;
 
 class smp : public std::enable_shared_from_this<smp> {
     alien::instance& _alien;
+    unsigned _shard_count = 0;
     std::vector<posix_thread> _threads;
     std::vector<std::function<void ()>> _thread_loops; // for dpdk
     std::optional<boost::barrier> _all_event_loops_done;
@@ -333,6 +334,7 @@ public:
     explicit smp(alien::instance& alien);
     ~smp();
     void configure(const smp_options& smp_opts, const reactor_options& reactor_opts);
+    unsigned shard_count() const { return _shard_count; }
     void cleanup() noexcept;
     void cleanup_cpu();
     void arrive_at_event_loop_end();
@@ -400,8 +402,15 @@ public:
     }
     static bool poll_queues();
     static bool pure_poll_queues();
+    std::ranges::range auto all_shards() noexcept {
+        return std::views::iota(0u, _shard_count);
+    }
+    [[deprecated("use smp::all_shards instead")]]
     static std::ranges::range auto all_cpus() noexcept {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
         return std::views::iota(0u, count);
+#pragma GCC diagnostic pop
     }
     /// Invokes func on all shards.
     ///
@@ -486,6 +495,7 @@ private:
     unsigned adjust_max_networking_aio_io_control_blocks(unsigned network_iocbs, unsigned reserve_iocbs);
     static void log_aiocbs(log_level level, unsigned storage, unsigned preempt, unsigned network, unsigned reserve);
 public:
+    [[deprecated("use smp::shard_count() instead")]]
     static unsigned count;
 };
 
