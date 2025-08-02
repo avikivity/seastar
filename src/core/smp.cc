@@ -92,7 +92,7 @@ future<smp_service_group> create_smp_service_group(smp_service_group_config ssgc
         return with_semaphore(smp_service_group_management_sem, 1, [ssgc] {
             auto it = boost::range::find_if(smp_service_groups, [&] (smp_service_group_impl& ssgi) { return ssgi.clients.empty(); });
             size_t id = it - smp_service_groups.begin();
-            return parallel_for_each(smp::all_cpus(), [ssgc, id] (unsigned cpu) {
+            return parallel_for_each(this_smp().all_shards(), [ssgc, id] (unsigned cpu) {
               return smp::submit_to(cpu, [ssgc, id, cpu] {
                 if (id >= smp_service_groups.size()) {
                     smp_service_groups.resize(id + 1); // may throw
