@@ -1904,7 +1904,7 @@ bool reactor_backend_selector::has_enough_aio_nr() {
      * So this method calculates:
      *  Available AIO on the system - (request AIO per-cpu * ncpus)
      */
-    if (aio_max_nr - aio_nr < reactor::max_aio * smp::count) {
+    if (aio_max_nr - aio_nr < reactor::max_aio * this_smp().shard_count()) {
         return false;
     }
     return true;

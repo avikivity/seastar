@@ -418,7 +418,7 @@ class posix_socket_impl final : public socket_impl {
 
     future<> find_port_and_connect(socket_address sa, socket_address local, transport proto = transport::TCP) {
         static thread_local std::default_random_engine random_engine{std::random_device{}()};
-        static thread_local std::uniform_int_distribution<uint16_t> u(49152/smp::count + 1, 65535/smp::count - 1);
+        static thread_local std::uniform_int_distribution<uint16_t> u(49152/this_smp().shard_count() + 1, 65535/this_smp().shard_count() - 1);
         // If no explicit local address, set to dest address family wildcard.
         if (local.is_unspecified()) {
             local = net::inet_address(sa.addr().in_family());
@@ -427,7 +427,7 @@ class posix_socket_impl final : public socket_impl {
         return repeat([this, sa, local, proto, attempts = 0, requested_port = ntoh(local.as_posix_sockaddr_in().sin_port)] () mutable {
             _fd = engine().make_pollable_fd(sa, int(proto));
             _fd.get_file_desc().setsockopt(SOL_SOCKET, SO_REUSEADDR, int(_reuseaddr));
-            uint16_t port = attempts++ < 5 && requested_port == 0 && proto == transport::TCP ? u(random_engine) * smp::count + this_shard_id() : requested_port;
+            uint16_t port = attempts++ < 5 && requested_port == 0 && proto == transport::TCP ? u(random_engine) * this_smp().shard_count() + this_shard_id() : requested_port;
             local.as_posix_sockaddr_in().sin_port = hton(port);
             return futurize_invoke([this, sa, local] { return engine().posix_connect(_fd, sa, local); }).then_wrapped([port, requested_port] (future<> f) {
                 try {
@@ -513,7 +513,7 @@ posix_server_socket_impl::accept() {
             case server_socket::load_balancing_algorithm::connection_distribution:
                 return _conntrack.get_handle();
             case server_socket::load_balancing_algorithm::port:
-                return _conntrack.get_handle(ntoh(sa.as_posix_sockaddr_in().sin_port) % smp::count);
+                return _conntrack.get_handle(ntoh(sa.as_posix_sockaddr_in().sin_port) % this_smp().shard_count());
             case server_socket::load_balancing_algorithm::fixed:
                 return _conntrack.get_handle(_fixed_cpu);
             default: abort();

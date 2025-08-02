@@ -83,7 +83,7 @@ extern logger seastar_logger;
 namespace internal {
 
 void disk_config_params::parse_config(const smp_options& smp_opts, const reactor_options& reactor_opts) {
-    seastar_logger.debug("smp::count: {}", smp::count);
+    seastar_logger.debug("smp::count: {}", this_smp_shard_count());
     _latency_goal = std::chrono::duration_cast<std::chrono::duration<double>>(latency_goal_opt(reactor_opts) * 1ms);
     seastar_logger.debug("latency_goal: {}", latency_goal().count());
     _flow_ratio_backpressure_threshold = reactor_opts.io_flow_ratio_threshold.get_value();

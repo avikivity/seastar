@@ -125,7 +125,7 @@ SEASTAR_TEST_CASE(test_map_reduce) {
             return x.map_reduce0(std::mem_fn(&X::cpu_id_squared),
                                  0,
                                  std::plus<int>()).then([] (int result) {
-                int n = smp::count - 1;
+                int n = this_smp_shard_count() - 1;
                 if (result != (n * (n + 1) * (2*n + 1)) / 6) {
                     throw std::runtime_error("map_reduce failed");
                 }
@@ -169,7 +169,7 @@ SEASTAR_TEST_CASE(test_map_reduce_lifetime) {
         return x.start().then([&x] {
             return do_with(0L, [&x] (auto& result) {
                 return x.map_reduce(reduce{result}, map{}).then([&result] {
-                    long n = smp::count - 1;
+                    long n = this_smp_shard_count() - 1;
                     long expected = (n * (n + 1) * (2*n + 1)) / 6;
                     BOOST_REQUIRE_EQUAL(result, expected);
                 });
@@ -208,7 +208,7 @@ SEASTAR_TEST_CASE(test_map_reduce0_lifetime) {
     return do_with_distributed<X>([] (distributed<X>& x) {
         return x.start().then([&x] {
             return x.map_reduce0(map{}, 0L, reduce{}).then([] (long result) {
-                long n = smp::count - 1;
+                long n = this_smp_shard_count() - 1;
                 long expected = (n * (n + 1) * (2*n + 1)) / 6;
                 BOOST_REQUIRE_EQUAL(result, expected);
             });
@@ -234,8 +234,8 @@ SEASTAR_TEST_CASE(test_map_lifetime) {
     return do_with_distributed<X>([] (distributed<X>& x) {
         return x.start().then([&x] {
             return x.map(map{}).then([] (std::vector<int> result) {
-                BOOST_REQUIRE_EQUAL(result.size(), smp::count);
-                for (size_t i = 0; i < (size_t)smp::count; i++) {
+                BOOST_REQUIRE_EQUAL(result.size(), this_smp_shard_count());
+                for (size_t i = 0; i < (size_t)this_smp_shard_count(); i++) {
                     BOOST_REQUIRE_EQUAL(result[i], i * i);
                 }
             });
@@ -249,7 +249,7 @@ SEASTAR_TEST_CASE(test_async) {
             return x.invoke_on_all(&async_service::run);
         });
     }).then([] {
-        return sleep(std::chrono::milliseconds(100 * (smp::count + 1)));
+        return sleep(std::chrono::milliseconds(100 * (this_smp_shard_count() + 1)));
     });
 }
 
@@ -260,7 +260,7 @@ SEASTAR_TEST_CASE(test_invoke_on_others) {
             void up() { ++counter; }
             future<> stop() { return make_ready_future<>(); }
         };
-        for (unsigned c = 0; c < smp::count; ++c) {
+        for (unsigned c = 0; c < this_smp_shard_count(); ++c) {
             smp::submit_to(c, [c] {
                 return seastar::async([c] {
                     sharded<my_service> s;
@@ -286,10 +286,10 @@ SEASTAR_TEST_CASE(test_invoke_on_others) {
 SEASTAR_TEST_CASE(test_smp_invoke_on_others) {
     return seastar::async([] {
         std::vector<std::vector<int>> calls;
-        calls.reserve(smp::count);
-        for (unsigned i = 0; i < smp::count; i++) {
+        calls.reserve(this_smp_shard_count());
+        for (unsigned i = 0; i < this_smp_shard_count(); i++) {
             auto& sv = calls.emplace_back();
-            sv.reserve(smp::count);
+            sv.reserve(this_smp_shard_count());
         }
 
         smp::invoke_on_all([&calls] {
@@ -298,9 +298,9 @@ SEASTAR_TEST_CASE(test_smp_invoke_on_others) {
             });
         }).get();
 
-        for (unsigned i = 0; i < smp::count; i++) {
-            BOOST_REQUIRE_EQUAL(calls[i].size(), smp::count - 1);
-            for (unsigned f = 0; f < smp::count; f++) {
+        for (unsigned i = 0; i < this_smp_shard_count(); i++) {
+            BOOST_REQUIRE_EQUAL(calls[i].size(), this_smp_shard_count() - 1);
+            for (unsigned f = 0; f < this_smp_shard_count(); f++) {
                 auto r = std::find(calls[i].begin(), calls[i].end(), f);
                 BOOST_REQUIRE_EQUAL(r == calls[i].end(), i == f);
             }
@@ -344,14 +344,14 @@ SEASTAR_TEST_CASE(test_smp_service_groups) {
         smp_service_group_config ssgc2;
         ssgc2.max_nonlocal_requests = 1000;
         auto ssg2 = create_smp_service_group(ssgc2).get();
-        shard_id other_shard = smp::count - 1;
+        shard_id other_shard = this_smp_shard_count() - 1;
         remote_worker rm1(1);
         remote_worker rm2(1000);
         auto bunch1 = parallel_for_each(std::views::iota(0, 20), [&] (int ignore) { return rm1.do_remote_work(other_shard, ssg1); });
         auto bunch2 = parallel_for_each(std::views::iota(0, 2000), [&] (int ignore) { return rm2.do_remote_work(other_shard, ssg2); });
         bunch1.get();
         bunch2.get();
-        if (smp::count > 1) {
+        if (this_smp_shard_count() > 1) {
             SEASTAR_ASSERT(rm1.max_concurrent_observed == 1);
             SEASTAR_ASSERT(rm2.max_concurrent_observed == 1000);
         }
@@ -384,7 +384,7 @@ SEASTAR_TEST_CASE(test_smp_timeout) {
             destroy_smp_service_group(ssg1).get();
         });
 
-        const shard_id other_shard = smp::count - 1;
+        const shard_id other_shard = this_smp_shard_count() - 1;
 
         // Ugly but beats using sleeps.
         std::mutex mut;

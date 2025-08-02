@@ -738,7 +738,7 @@ private:
 
     inline
     unsigned get_cpu(const item_key& key) {
-        return std::hash<item_key>()(key) % smp::count;
+        return std::hash<item_key>()(key) % this_smp_shard_count();
     }
 public:
     sharded_cache(distributed<cache>& peers) : _peers(peers) {}
@@ -1008,7 +1008,7 @@ private:
                         }).then([&out] {
                             return print_stat(out, "auth_errors", 0);
                         }).then([&out] {
-                            return print_stat(out, "threads", smp::count);
+                            return print_stat(out, "threads", this_smp_shard_count());
                         }).then([&out, v = all_cache_stats._size] {
                             return print_stat(out, "curr_items", v);
                         }).then([&out, v = total_items] {

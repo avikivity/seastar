@@ -302,7 +302,7 @@ struct stdout_printer final : result_printer {
                "single run iterations:", c.single_run_iterations,
                "single run duration:", duration { double(c.single_run_duration.count()) },
                "number of runs:", c.number_of_runs,
-               "number of cores:", smp::count,
+               "number of cores:", this_smp_shard_count(),
                "random seed:", c.random_seed);
 
     fmt::print("{:<{}}", "test", name_column_length());

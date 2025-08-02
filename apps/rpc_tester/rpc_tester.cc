@@ -728,7 +728,7 @@ int main(int ac, char** av) {
             YAML::Emitter out;
             out << YAML::BeginDoc;
             out << YAML::BeginSeq;
-            for (unsigned i = 0; i < smp::count; i++) {
+            for (unsigned i = 0; i < this_smp_shard_count(); i++) {
                 out << YAML::BeginMap;
                 out << YAML::Key << "shard" << YAML::Value << i;
                 ctx.invoke_on(i, [&out] (auto& c) {

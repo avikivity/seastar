@@ -1828,14 +1828,14 @@ SEASTAR_TEST_CASE(case_insensitive_header_reply) {
 }
 
 SEASTAR_THREAD_TEST_CASE(multiple_connections) {
-    loopback_connection_factory lcf = loopback_connection_factory::with_pending_capacity(smp::count + 1, 1);
+    loopback_connection_factory lcf = loopback_connection_factory::with_pending_capacity(this_smp_shard_count() + 1, 1);
     http_server server("test");
     httpd::http_server_tester::listeners(server).emplace_back(lcf.get_server_socket());
     socket_address addr{ipv4_addr()};
 
     std::vector<connected_socket> socks;
     // Make sure one shard has two connections pending.
-    for (unsigned i = 0; i <= smp::count; ++i) {
+    for (unsigned i = 0; i <= this_smp_shard_count(); ++i) {
         socks.push_back(loopback_socket_impl(lcf).connect(addr, addr).get());
     }
 

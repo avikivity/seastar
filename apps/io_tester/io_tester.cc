@@ -210,7 +210,7 @@ class shard_config {
     std::unordered_set<unsigned> _shards;
 public:
     shard_config()
-        : _shards(boost::copy_range<std::unordered_set<unsigned>>(boost::irange(0u, smp::count))) {}
+        : _shards(boost::copy_range<std::unordered_set<unsigned>>(boost::irange(0u, this_smp_shard_count()))) {}
     shard_config(std::unordered_set<unsigned> s) : _shards(std::move(s)) {}
 
     bool is_set(unsigned cpu) const {
@@ -636,7 +636,7 @@ private:
         return open_file_dma(name, flags).then([this] (auto f) {
             _file = std::move(f);
             return _file.size().then([this] (uint64_t size) {
-                auto shard_area_size = align_down<uint64_t>(size / smp::count, 1 << 20);
+                auto shard_area_size = align_down<uint64_t>(size / this_smp_shard_count(), 1 << 20);
                 if (_config.offset_in_bdev + _config.file_size > shard_area_size) {
                     throw std::runtime_error("Data doesn't fit the blockdevice");
                 }
@@ -803,7 +803,7 @@ private:
     uint64_t max_concurrency() const {
         // When we have many files it is easy to exceed the limit of open file descriptors.
         // To avoid that the limit is divided between shards (leaving some room for other jobs).
-        return static_cast<uint64_t>((1024u / smp::count) * 0.8);
+        return static_cast<uint64_t>((1024u / this_smp_shard_count()) * 0.8);
     }
 
     bool all_files_removed() const {
@@ -1038,7 +1038,7 @@ struct convert<job_config> {
         // constant) disk space between workloads. Each shard inside the
         // workload thus uses its portion of the assigned space.
         if (node["data_size"]) {
-            const uint64_t per_shard_bytes = node["data_size"].as<byte_size>().size / smp::count;
+            const uint64_t per_shard_bytes = node["data_size"].as<byte_size>().size / this_smp_shard_count();
             cl.file_size = align_up<uint64_t>(per_shard_bytes, extent_size_hint_alignment);
         } else {
             cl.file_size = 1ull << 30; // 1G by default
@@ -1128,7 +1128,7 @@ static void show_results(distributed<context>& ctx) {
     YAML::Emitter out;
     out << YAML::BeginDoc;
     out << YAML::BeginSeq;
-    for (unsigned i = 0; i < smp::count; ++i) {
+    for (unsigned i = 0; i < this_smp_shard_count(); ++i) {
         out << YAML::BeginMap;
         out << YAML::Key << "shard" << YAML::Value << i;
         ctx.invoke_on(i, [&out] (auto& c) {

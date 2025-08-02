@@ -52,7 +52,7 @@ private:
 public:
     http_client(unsigned duration, unsigned total_conn, unsigned reqs_per_conn)
         : _duration(duration)
-        , _conn_per_core(total_conn / smp::count)
+        , _conn_per_core(total_conn / this_smp_shard_count())
         , _reqs_per_conn(reqs_per_conn)
         , _run_timer([this] { _timer_done = true; })
         , _timer_based(reqs_per_conn == 0) {
@@ -189,7 +189,7 @@ int main(int ac, char** av) {
         auto total_conn= config["conn"].as<unsigned>();
         auto duration = config["duration"].as<unsigned>();
 
-        if (total_conn % smp::count != 0) {
+        if (total_conn % this_smp_shard_count() != 0) {
             fmt::print("Error: conn needs to be n * cpu_nr\n");
             return make_ready_future<int>(-1);
         }
@@ -213,7 +213,7 @@ int main(int ac, char** av) {
            auto finished = steady_clock_type::now();
            auto elapsed = finished - started;
            auto secs = static_cast<double>(elapsed.count() / 1000000000.0);
-           fmt::print("Total cpus: {:d}\n", smp::count);
+           fmt::print("Total cpus: {:d}\n", this_smp_shard_count());
            fmt::print("Total requests: {:d}\n", total_reqs);
            fmt::print("Total time: {:f}\n", secs);
            fmt::print("Requests/sec: {:f}\n", static_cast<double>(total_reqs) / secs);

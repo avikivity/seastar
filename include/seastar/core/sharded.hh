@@ -456,7 +456,7 @@ public:
                 return std::invoke(map, *inst);
             });
         };
-        return ::seastar::map_reduce(smp::all_cpus().begin(), smp::all_cpus().end(),
+        return ::seastar::map_reduce(this_smp().all_shards().begin(), this_smp().all_shards().end(),
                             std::move(wrapped_map),
                             std::move(initial),
                             std::move(reduce));
@@ -472,7 +472,7 @@ public:
                 return std::invoke(map, *inst);
             });
         };
-        return ::seastar::map_reduce(smp::all_cpus().begin(), smp::all_cpus().end(),
+        return ::seastar::map_reduce(this_smp().all_shards().begin(), this_smp().all_shards().end(),
                             std::move(wrapped_map),
                             std::move(initial),
                             std::move(reduce));
@@ -621,7 +621,7 @@ template <typename... Args>
 future<>
 sharded<Service>::start(Args&&... args) noexcept {
   try {
-    _instances.resize(smp::count);
+    _instances.resize(this_smp().shard_count());
     return sharded_parallel_for_each(
         [this, args = std::make_tuple(std::forward<Args>(args)...)] (unsigned c) mutable {
             return smp::submit_to(c, [this, args] () mutable {
@@ -863,8 +863,8 @@ sharded<Service>::invoke_on(R range, smp_submit_to_options options, Func func, A
             return futurize_apply(func, std::tuple_cat(std::forward_as_tuple(service), std::tuple(internal::unwrap_sharded_arg(std::forward<Args>(args))...)));
         });
         return parallel_for_each(range, [this, options, func = std::move(func_futurized)] (unsigned s) {
-            if (s > smp::count - 1) {
-                throw std::invalid_argument(format("Invalid shard id in range: {}. Must be in range [0,{})", s, smp::count));
+            if (s > this_smp().shard_count() - 1) {
+                throw std::invalid_argument(format("Invalid shard id in range: {}. Must be in range [0,{})", s, this_smp().shard_count()));
             }
             return smp::submit_to(s, options, [this, func] {
                 return func(*get_local_service());

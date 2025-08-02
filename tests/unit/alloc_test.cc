@@ -167,7 +167,7 @@ SEASTAR_THREAD_TEST_CASE(test_cross_thread_realloc) {
         BOOST_TEST_CONTEXT("cross_shard=" << cross_shard << ", initial="
                 << initial_size << ", realloc_size=" << realloc_size) {
 
-            auto other_shard = (this_shard_id() + cross_shard) % smp::count;
+            auto other_shard = (this_shard_id() + cross_shard) % this_smp_shard_count();
 
             char *p = static_cast<char *>(malloc(initial_size));
 

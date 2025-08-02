@@ -98,7 +98,7 @@ public:
 };
 
 SEASTAR_TEST_CASE(foreign_ptr_cpu_test) {
-    if (smp::count == 1) {
+    if (this_smp_shard_count() == 1) {
         std::cerr << "Skipping multi-cpu foreign_ptr tests. Run with --smp=2 to test multi-cpu delete and reset.";
         return make_ready_future<>();
     }
@@ -118,7 +118,7 @@ SEASTAR_TEST_CASE(foreign_ptr_cpu_test) {
 }
 
 SEASTAR_TEST_CASE(foreign_ptr_move_assignment_test) {
-    if (smp::count == 1) {
+    if (this_smp_shard_count() == 1) {
         std::cerr << "Skipping multi-cpu foreign_ptr tests. Run with --smp=2 to test multi-cpu delete and reset.";
         return make_ready_future<>();
     }
@@ -138,7 +138,7 @@ SEASTAR_TEST_CASE(foreign_ptr_move_assignment_test) {
 }
 
 SEASTAR_THREAD_TEST_CASE(foreign_ptr_destroy_test) {
-    if (smp::count == 1) {
+    if (this_smp_shard_count() == 1) {
         std::cerr << "Skipping multi-cpu foreign_ptr tests. Run with --smp=2 to test multi-cpu delete and reset.";
         return;
     }
@@ -146,7 +146,7 @@ SEASTAR_THREAD_TEST_CASE(foreign_ptr_destroy_test) {
     using namespace std::chrono_literals;
 
     std::vector<promise<bool>> done;
-    done.resize(smp::count);
+    done.resize(this_smp_shard_count());
 
     struct deferred {
         std::vector<promise<bool>>& done;

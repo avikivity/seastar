@@ -256,13 +256,13 @@ class loopback_connection_factory {
     unsigned _pending_capacity = 10;
     std::vector<lw_shared_ptr<queue<connected_socket>>> _pending;
 public:
-    explicit loopback_connection_factory(unsigned shards_count = smp::count)
+    explicit loopback_connection_factory(unsigned shards_count = this_smp_shard_count())
             : _shards_count(shards_count)
     {
         _pending.resize(shards_count);
     }
 
-    static loopback_connection_factory with_pending_capacity(unsigned pending_capacity, unsigned shards_count = smp::count) {
+    static loopback_connection_factory with_pending_capacity(unsigned pending_capacity, unsigned shards_count = this_smp_shard_count()) {
         auto lcf = loopback_connection_factory(shards_count);
         lcf._pending_capacity = pending_capacity;
         return lcf;

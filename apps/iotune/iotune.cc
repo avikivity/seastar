@@ -534,8 +534,8 @@ class iotune_multi_shard_context {
     uint64_t _random_read_io_buffer_size;
 
     unsigned per_shard_io_depth() const {
-        auto iodepth = _test_directory.max_iodepth() / smp::count;
-        if (this_shard_id() < _test_directory.max_iodepth() % smp::count) {
+        auto iodepth = _test_directory.max_iodepth() / this_smp_shard_count();
+        if (this_shard_id() < _test_directory.max_iodepth() % this_smp_shard_count()) {
             iodepth++;
         }
         return std::min(iodepth, 128u);
@@ -551,7 +551,7 @@ public:
     }
 
     future<> start() {
-       const auto maximum_size = (_test_directory.available_space() / (2 * smp::count));
+       const auto maximum_size = (_test_directory.available_space() / (2 * this_smp_shard_count()));
        return _iotune_test_file.start(_test_directory, maximum_size, _random_write_io_buffer_size, _random_read_io_buffer_size).then([this] {
            return sharded_rates.start();
        });
@@ -823,10 +823,10 @@ int main(int ac, char** av) {
                 iotune_logger.info("Disk parameters: max_iodepth={} disks_per_array={} minimum_io_size={}",
                         test_directory.max_iodepth(), test_directory.disks_per_array(), test_directory.minimum_io_size());
 
-                if (test_directory.max_iodepth() < smp::count) {
-                    iotune_logger.warn("smp::count={} is greater than max_iodepth={} - shards above max_io_depth "
+                if (test_directory.max_iodepth() < this_smp_shard_count()) {
+                    iotune_logger.warn("this_smp_shard_count()={} is greater than max_iodepth={} - shards above max_io_depth "
                                        "will be ignored during random read and random write measurements",
-                                       smp::count, test_directory.max_iodepth());
+                                       this_smp_shard_count(), test_directory.max_iodepth());
                 }
 
                 if (random_write_io_buffer_size != 0u) {
@@ -860,10 +860,10 @@ int main(int ac, char** av) {
                 std::cout.flush();
                 io_rates write_bw;
                 size_t sequential_buffer_size = 1 << 20;
-                for (unsigned shard = 0; shard < smp::count; ++shard) {
-                    write_bw += iotune_tests.write_sequential_data(shard, sequential_buffer_size, duration * 0.70 / smp::count).get();
+                for (unsigned shard = 0; shard < this_smp_shard_count(); ++shard) {
+                    write_bw += iotune_tests.write_sequential_data(shard, sequential_buffer_size, duration * 0.70 / this_smp_shard_count()).get();
                 }
-                write_bw.bytes_per_sec /= smp::count;
+                write_bw.bytes_per_sec /= this_smp_shard_count();
                 rates = iotune_tests.get_serial_rates().get();
                 fmt::print("{} MiB/s{}\n", uint64_t(write_bw.bytes_per_sec / (1024 * 1024)), accuracy_msg());
 

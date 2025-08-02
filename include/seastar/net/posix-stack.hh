@@ -47,7 +47,7 @@ class conntrack {
     class load_balancer {
         std::vector<unsigned> _cpu_load;
     public:
-        load_balancer() : _cpu_load(size_t(smp::count), 0) {}
+        load_balancer() : _cpu_load(size_t(this_smp_shard_count()), 0) {}
         void closed_cpu(shard_id cpu) {
             _cpu_load[cpu]--;
         }

@@ -325,6 +325,7 @@ class smp : public std::enable_shared_from_this<smp> {
     std::unique_ptr<smp_message_queue*[], qs_deleter> _qs_owner;
     static thread_local smp_message_queue**_qs;
     static thread_local std::thread::id _tmain;
+    static inline thread_local smp* _this_smp = nullptr;
     bool _using_dpdk = false;
     std::vector<unsigned> _shard_to_numa_node_mapping;
 
@@ -425,7 +426,7 @@ public:
     static future<> invoke_on_all(smp_submit_to_options options, Func&& func) noexcept {
         static_assert(std::is_same_v<future<>, typename futurize<std::invoke_result_t<Func>>::type>, "bad Func signature");
         static_assert(std::is_nothrow_move_constructible_v<Func>);
-        return parallel_for_each(all_cpus(), [options, &func] (unsigned id) {
+        return parallel_for_each(this_smp().all_shards(), [options, &func] (unsigned id) {
             return smp::submit_to(id, options, Func(func));
         });
     }
@@ -457,7 +458,7 @@ public:
     static future<> invoke_on_others(unsigned cpu_id, smp_submit_to_options options, Func func) noexcept {
         static_assert(std::is_same_v<future<>, typename futurize<std::invoke_result_t<Func>>::type>, "bad Func signature");
         static_assert(std::is_nothrow_move_constructible_v<Func>);
-        return parallel_for_each(all_cpus(), [cpu_id, options, func = std::move(func)] (unsigned id) {
+        return parallel_for_each(this_smp().all_shards(), [cpu_id, options, func = std::move(func)] (unsigned id) {
             return id != cpu_id ? smp::submit_to(id, options, Func(func)) : make_ready_future<>();
         });
     }
@@ -487,6 +488,9 @@ public:
     static future<> invoke_on_others(Func func) noexcept {
         return invoke_on_others(this_shard_id(), std::move(func));
     }
+    static smp& this_smp() noexcept {
+        return *_this_smp;
+    }
 private:
     void start_all_queues();
     void pin(unsigned cpu_id);
@@ -495,9 +499,25 @@ private:
     unsigned adjust_max_networking_aio_io_control_blocks(unsigned network_iocbs, unsigned reserve_iocbs);
     static void log_aiocbs(log_level level, unsigned storage, unsigned preempt, unsigned network, unsigned reserve);
 public:
-    [[deprecated("use smp::shard_count() instead")]]
+    [[deprecated("use this_smp_shard_count() or smp::shard_count() instead")]]
     static unsigned count;
 };
+
+/// Returns the smp object used for cross-shard communications.
+/// May only be called from a reactor thread.
+inline
+smp&
+this_smp() noexcept {
+    return smp::this_smp();
+}
+
+/// Returns the number of shards in the system.
+/// May only be called from a reactor thread.
+inline
+unsigned
+this_smp_shard_count() noexcept {
+    return this_smp().shard_count();
+}
 
 SEASTAR_MODULE_EXPORT_END
 

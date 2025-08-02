@@ -557,7 +557,7 @@ void configure(const options& opts) {
             : sstring(opts.collectd_hostname.get_value());
 
     // Now create send loops on each cpu
-    for (unsigned c = 0; c < smp::count; c++) {
+    for (unsigned c = 0; c < this_smp().shard_count(); c++) {
         // FIXME: future is discarded
         (void)smp::submit_to(c, [=] () {
             get_impl().start(host, addr, period);

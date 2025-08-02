@@ -137,7 +137,7 @@ $
 
 # Threads and memory
 ## Seastar threads
-As explained in the introduction, Seastar-based programs run a single thread on each CPU. Each of these threads runs its own event loop, known as the *engine* in Seastar nomenclature. By default, the Seastar application will take over all the available cores, starting one thread per core. We can see this with the following program, printing `seastar::smp::count` which is the number of started threads:
+As explained in the introduction, Seastar-based programs run a single thread on each CPU. Each of these threads runs its own event loop, known as the *engine* in Seastar nomenclature. By default, the Seastar application will take over all the available cores, starting one thread per core. We can see this with the following program, printing `seastar::this_smp_shard_count()` which is the number of started threads:
 
 ```cpp
 #include <seastar/core/app-template.hh>
@@ -147,7 +147,7 @@ As explained in the introduction, Seastar-based programs run a single thread on 
 int main(int argc, char** argv) {
     seastar::app_template app;
     app.run(argc, argv, [] {
-            std::cout << seastar::smp::count << "\n";
+            std::cout << seastar::this_smp_shard_count() << "\n";
             return seastar::make_ready_future<>();
     });
 }
@@ -1620,14 +1620,14 @@ In the examples we saw earlier, `main()` ran our function `f()` only once, on th
 seastar::future<> service_loop();
 
 seastar::future<> f() {
-    return seastar::parallel_for_each(std::views::iota(0u, seastar::smp::count),
+    return seastar::parallel_for_each(std::views::iota(0u, seastar::this_smp_shard_count()),
             [] (unsigned c) {
         return seastar::smp::submit_to(c, service_loop);
     });
 }
 ```
 
-Here we ask each of Seastar cores (from 0 to `smp::count`-1) to run the same function `service_loop()`. Each of these invocations returns a future, and `f()` will return when all of them have returned (in the examples below, they will never return - we will discuss shutting down services in later sections).
+Here we ask each of Seastar cores (from 0 to `this_smp_shard_count()`-1) to run the same function `service_loop()`. Each of these invocations returns a future, and `f()` will return when all of them have returned (in the examples below, they will never return - we will discuss shutting down services in later sections).
 
 We begin with a simple example of a TCP network server written in Seastar. This server repeatedly accepts connections on TCP port 1234, and returns an empty response:
 
@@ -1795,7 +1795,7 @@ The ```handle_connection()``` function itself is straightforward --- it repeated
 
 # Sharded services
 
-In the previous section we saw that a Seastar application usually needs to run its code on all available CPU cores. We saw that the `seastar::smp::submit_to()` function allows the main function, which initially runs only on the first core, to start the server's code on all `seastar::smp::count` cores.
+In the previous section we saw that a Seastar application usually needs to run its code on all available CPU cores. We saw that the `seastar::smp::submit_to()` function allows the main function, which initially runs only on the first core, to start the server's code on all `seastar::this_smp_shard_count()` cores.
 
 However, usually one needs not just to run code on each core, but also to have an object that contains the state of this code. Additionally, one may like to interact with those different objects, and also have a mechanism to stop the service running on the different cores.
 

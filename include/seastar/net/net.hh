@@ -267,7 +267,7 @@ protected:
     size_t _rss_table_bits = 0;
 public:
     device() {
-        _queues = std::make_unique<qp*[]>(smp::count);
+        _queues = std::make_unique<qp*[]>(this_smp().shard_count());
     }
     virtual ~device() {};
     qp& queue_for_cpu(unsigned cpu) { return *_queues[cpu]; }

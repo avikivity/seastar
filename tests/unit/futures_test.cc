@@ -2257,12 +2257,12 @@ SEASTAR_THREAD_TEST_CASE(test_manual_clock_advance) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_ready_future_across_shards) {
-    if (smp::count == 1) {
+    if (this_smp_shard_count() == 1) {
         seastar_logger.info("test_ready_future_across_shards requires at least 2 shards");
         return;
     }
 
-    auto other_shard = (this_shard_id() + 1) % smp::count;
+    auto other_shard = (this_shard_id() + 1) % this_smp_shard_count();
     auto f1 = make_ready_future<int>(42);
     smp::submit_to(other_shard, [f1 = std::move(f1)] () mutable {
         BOOST_REQUIRE_EQUAL(f1.get(), 42);
@@ -2270,13 +2270,13 @@ SEASTAR_THREAD_TEST_CASE(test_ready_future_across_shards) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_foreign_promise_set_value) {
-    if (smp::count == 1) {
+    if (this_smp_shard_count() == 1) {
         seastar_logger.info("test_foreign_promise_set_value requires at least 2 shards");
         return;
     }
 
     promise<int> pr;
-    auto other_shard = (this_shard_id() + 1) % smp::count;
+    auto other_shard = (this_shard_id() + 1) % this_smp_shard_count();
 
     auto getter = pr.get_future();
 

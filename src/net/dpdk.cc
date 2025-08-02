@@ -1516,7 +1516,7 @@ int dpdk_device::init_port_start()
     // Set RSS mode: enable RSS if seastar is configured with more than 1 CPU.
     // Even if port has a single queue we still want the RSS feature to be
     // available in order to make HW calculate RSS hash for us.
-    if (smp::count > 1) {
+    if (this_smp_shard_count() > 1) {
         if (_dev_info.hash_key_size == 40) {
             _rss_key = default_rsskey_40bytes;
         } else if (_dev_info.hash_key_size == 52) {
@@ -2291,7 +2291,7 @@ std::unique_ptr<net::device> create_dpdk_net_device(
 std::unique_ptr<net::device> create_dpdk_net_device(
                                     const hw_config& hw_cfg)
 {
-    return create_dpdk_net_device(*hw_cfg.port_index, smp::count, hw_cfg.lro, hw_cfg.hw_fc);
+    return create_dpdk_net_device(*hw_cfg.port_index, this_smp_shard_count(), hw_cfg.lro, hw_cfg.hw_fc);
 }
 
 }

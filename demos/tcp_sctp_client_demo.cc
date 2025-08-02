@@ -205,7 +205,7 @@ public:
 
     future<> start(ipv4_addr server_addr, std::string test, unsigned ncon) {
         _server_addr = server_addr;
-        _concurrent_connections = ncon * smp::count;
+        _concurrent_connections = ncon * this_smp_shard_count();
         _total_pings = _pings_per_connection * _concurrent_connections;
         _test = test;
 

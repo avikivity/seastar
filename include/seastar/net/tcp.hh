@@ -833,7 +833,7 @@ auto tcp<InetTraits>::connect(socket_address sa) -> connection {
     auto dst_ip = ipv4_address(sa);
     auto dst_port = net::ntoh(sa.u.in.sin_port);
 
-    if (smp::count > 1) {
+    if (this_smp().shard_count() > 1) {
         do {
             id = connid{src_ip, dst_ip, _port_dist(_e), dst_port};
         } while (_inet._inet.netif()->hash2cpu(id.hash(_inet._inet.netif()->rss_key())) != this_shard_id()

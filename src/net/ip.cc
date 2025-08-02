@@ -194,7 +194,7 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
             auto cpu_id = this_shard_id();
             auto l4 = _l4[h.ip_proto];
             if (l4) {
-                if (smp::count == 1) {
+                if (this_smp().shard_count() == 1) {
                     l4->received(std::move(ip_data), h.src_ip, h.dst_ip);
                 } else {
                     size_t l4_offset = 0;
