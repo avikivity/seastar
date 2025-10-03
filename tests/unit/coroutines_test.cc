@@ -979,7 +979,7 @@ SEASTAR_TEST_CASE(test_lambda_coroutine_in_continuation) {
     double n = dist(rand_eng);
     auto sin1 = std::sin(n); // avoid optimizer tricks
     auto boo = std::array<char, 1025>(); // bias coroutine size towards 1024 size class
-    auto sin2 = co_await yield().then(coroutine::lambda([n, boo] () -> future<double> {
+    auto sin2 = co_await yield().then(coroutine::lambda([] (auto n, auto boo) -> future<double> {
         // Expect coroutine capture to be freed after co_await without coroutine::lambda
         co_await yield();
         // Try to overwrite recently-release coroutine frame by allocating in similar size-class
@@ -996,7 +996,7 @@ SEASTAR_TEST_CASE(test_lambda_coroutine_in_continuation) {
         }
         (void)boo;
         co_return std::sin(n);
-    }));
+    }, n, boo));
     BOOST_REQUIRE_EQUAL(sin1, sin2);
 }
 

@@ -30,6 +30,8 @@
 
 #ifndef SEASTAR_MODULE
 #include <coroutine>
+#include <functional>
+#include <utility>
 #endif
 
 namespace seastar {
@@ -219,19 +221,39 @@ template<typename T> struct [[nodiscard]] without_preemption_check : public seas
 /// ```
 ///
 /// \tparam Func type of function object (typically inferred)
-template <typename Func>
+template <typename Func, typename... FrontArgs>
 class lambda {
-    Func* _func;
+    using bind_t = decltype(std::bind_front(std::declval<Func>(), std::declval<FrontArgs>()...));
+    [[no_unique_address]] bind_t _func;
 public:
     /// Create a lambda coroutine wrapper from a function object, to be passed
     /// to a Seastar function that accepts a continuation.
-    explicit lambda(Func&& func) : _func(&func) {}
+    explicit lambda(Func&& func, FrontArgs&&... front_args) : _func(std::bind_front(std::forward<Func>(func), std::forward<FrontArgs>(front_args)...)) {}
+
     /// Calls the lambda coroutine object. Normally invoked by Seastar.
     template <typename... Args>
-    decltype(auto) operator()(Args&&... args) const {
-        return std::invoke(*_func, std::forward<Args>(args)...);
+    requires std::invocable<bind_t, Args...>
+    auto operator()(Args&&... args) && {
+        return std::invoke(std::move(_func), std::forward<Args>(args)...);
+    }
+
+    /// Calls the lambda coroutine object. Normally invoked by Seastar.
+    template <typename... Args>
+    requires std::invocable<const bind_t&, Args...>
+    auto operator()(Args&&... args) const & {
+        return std::invoke(_func, std::forward<Args>(args)...);
+    }
+
+    /// Calls the lambda coroutine object. Normally invoked by Seastar.
+    template <typename... Args>
+    requires std::invocable<bind_t&, Args...>
+    auto operator()(Args&&... args) & {
+        return std::invoke(_func, std::forward<Args>(args)...);
     }
 };
+
+template <typename Func, typename... FrontArgs>
+lambda(Func, FrontArgs&&...) -> lambda<Func, FrontArgs...>;
 
 }
 

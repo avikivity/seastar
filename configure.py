@@ -183,6 +183,8 @@ def configure_mode(mode):
 
     TRANSLATED_ARGS = [
         '-DCMAKE_BUILD_TYPE={}'.format(MODE_TO_CMAKE_BUILD_TYPE[mode]),
+        '-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O1 -g' if mode == 'release' else '',
+        '-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O1 -g' if mode == 'release' else '',
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
         '-DCMAKE_CXX_STANDARD={}'.format(args.cpp_standard),
         '-DCMAKE_CXX_COMPILER_LAUNCHER={}'.format(args.ccache),

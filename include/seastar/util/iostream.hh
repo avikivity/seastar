@@ -43,7 +43,7 @@ future<> write_to_stream_and_close(output_stream<char>&& out_, W writer) {
     output_stream<char> out = std::move(out_);
     std::exception_ptr ex;
     try {
-        co_await writer(out);
+        co_await std::move(writer)(out);
         co_await out.flush();
     } catch (...) {
         ex = std::current_exception();

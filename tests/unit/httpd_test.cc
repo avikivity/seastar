@@ -1423,9 +1423,17 @@ struct echo_handler : public handler_base {
         if (!chunked_reply) {
             rep->write_body("txt", content);
         } else {
-            rep->write_body("txt", [ c = content ] (output_stream<char>& out) -> future<> {
+#if 0
+            auto body_writer_lambda = coroutine::lambda([] (sstring c, output_stream<char>& out) -> future<> {
                 co_await out.write(std::move(c));
-            });
+            }, content);
+            extern output_stream<char> make_output_stream();
+            auto tmp1 = make_output_stream();
+            (void)body_writer_lambda(tmp1);
+#endif
+            rep->write_body("txt", coroutine::lambda([] (sstring c, output_stream<char>& out) -> future<> {
+                co_await out.write(std::move(c));
+            }, content));
         }
         return make_ready_future<std::unique_ptr<http::reply>>(std::move(rep));
     }
@@ -1628,9 +1636,9 @@ static future<> test_basic_content(bool streamed, bool chunked_reply) {
                     jumbo_copy.get_write()[i] = jumbo[i];
                 }
                 auto req = http::request::make("GET", "test", "/test");
-                req.write_body("txt", size, [jumbo = std::move(jumbo)] (output_stream<char>& out) -> future<> {
+                req.write_body("txt", size, coroutine::lambda([] (temporary_buffer<char> jumbo, output_stream<char>& out) -> future<> {
                     co_await out.write(jumbo.get(), jumbo.size());
-                });
+                }, std::move(jumbo)));
                 cln.make_request(std::move(req), [chunked_reply, size, jumbo_copy = std::move(jumbo_copy)] (const http::reply& resp, input_stream<char>&& in) mutable {
                     if (!chunked_reply) {
                         BOOST_REQUIRE_EQUAL(resp.content_length, size);
