@@ -18,24 +18,11 @@
 /*
  * Copyright (C) 2017 ScyllaDB
  */
-#ifdef SEASTAR_MODULE
-module;
-#include <cstddef>
-#include <exception>
-#include <iosfwd>
-#include <memory>
-#include <optional>
-#include <utility>
-#include <vector>
-module seastar;
-#else
 #include <seastar/core/future-util.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/print.hh>
 #include <seastar/core/semaphore.hh>
-#endif
-
 namespace seastar {
 
 parallel_for_each_state::parallel_for_each_state(size_t n) {

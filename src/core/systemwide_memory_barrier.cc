@@ -19,10 +19,6 @@
  * Copyright 2015 Scylla DB
  */
 
-#ifdef SEASTAR_MODULE
-module;
-#endif
-
 #include <sys/mman.h>
 #include <unistd.h>
 #include <atomic>
@@ -33,14 +29,10 @@ module;
 #include <unistd.h>
 #endif
 
-#ifdef SEASTAR_MODULE
-module seastar;
-#else
 #include <seastar/core/internal/systemwide_memory_barrier.hh>
 #include <seastar/core/cacheline.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/defer.hh>
-#endif
 #include <seastar/util/assert.hh>
 
 namespace seastar {

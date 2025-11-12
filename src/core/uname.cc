@@ -20,10 +20,6 @@
  * Copyright (C) 2019 ScyllaDB
  */
 
-#ifdef SEASTAR_MODULE
-module;
-#endif
-
 #include <memory>
 #include <optional>
 #include <regex>
@@ -31,12 +27,7 @@ module;
 #include <sys/utsname.h>
 #include <iostream>
 
-#ifdef SEASTAR_MODULE
-module seastar;
-#else
 #include <seastar/core/internal/uname.hh>
-#endif
-
 namespace seastar {
 
 namespace internal {

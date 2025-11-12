@@ -19,10 +19,6 @@
  * Copyright (C) 2016 ScyllaDB.
  */
 
-#ifdef SEASTAR_MODULE
-module;
-#endif
-
 #include <memory>
 #include <regex>
 #include <random>
@@ -33,15 +29,10 @@ module;
 #include <boost/range/algorithm_ext/erase.hpp>
 #include <fmt/ranges.h>
 
-#ifdef SEASTAR_MODULE
-module seastar;
-#else
 #include <seastar/core/metrics.hh>
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/relabel_config.hh>
 #include <seastar/core/reactor.hh>
-#endif
-
 namespace seastar {
 extern seastar::logger seastar_logger;
 namespace metrics {

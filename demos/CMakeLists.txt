@@ -131,4 +131,5 @@ if (Seastar_MODULE)
   target_link_libraries (hello_cxx_module
     PRIVATE
       seastar-module)
+  add_dependencies (demos hello_cxx_module)
 endif ()
