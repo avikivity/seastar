@@ -99,6 +99,10 @@ target_compile_definitions (seastar-module
     SEASTAR_SCHEDULING_GROUPS_COUNT=${Seastar_SCHEDULING_GROUPS_COUNT}
   PRIVATE
     ${Seastar_PRIVATE_COMPILE_DEFINITIONS})
+# Define SEASTAR_MODULE only for the module interface file to enable export keywords
+set_source_files_properties (seastar.cppm
+  PROPERTIES
+    COMPILE_DEFINITIONS "SEASTAR_MODULE")
 target_compile_options (seastar-module
   PUBLIC
     -U_FORTIFY_SOURCE)
