@@ -21,16 +21,15 @@
 
 // C++20 module implementation for Seastar
 // 
-// This file follows the libstdc++ approach where we import all headers
-// in the global module fragment and then re-export them as a module.
-// This avoids putting module declarations inside #ifdef blocks, which
-// is illegal per the C++ standard.
+// This file follows the libstdc++ approach where all headers are included
+// in the global module fragment, and then we use export declarations to
+// re-export the seastar namespace as a module. This avoids putting module
+// declarations inside #ifdef blocks, which is illegal per the C++ standard.
 
 module;
 
-// Put all headers not provided by this module into the global module fragment
-// to prevent attachment to the module. These are dependency headers that
-// we use but don't re-export.
+// Put all headers into the global module fragment to prevent attachment
+// to the module. This includes both dependency headers and Seastar headers.
 
 #include <any>
 #include <array>
@@ -141,11 +140,7 @@ module;
 #include <ucontext.h>
 #include <unistd.h>
 
-export module seastar;
-
-// Include all Seastar public headers to be exported in the module purview.
-// By including them after "export module", everything they declare in the
-// seastar namespace (and any std:: specializations) will be exported.
+// Include all Seastar public headers in the global module fragment
 #include <seastar/util/std-compat.hh>
 #include <seastar/core/abortable_fifo.hh>
 #include <seastar/core/abort_on_ebadf.hh>
@@ -298,6 +293,11 @@ export module seastar;
 #include <seastar/json/formatter.hh>
 #include <seastar/json/json_elements.hh>
 
+export module seastar;
+
+// Export the seastar namespace and all its symbols
+export namespace seastar {}
+
 module : private;
 
 // Include implementation headers in the private module partition.
@@ -335,4 +335,3 @@ module : private;
 
 #include <seastar/http/url.hh>
 #include <seastar/http/internal/content_source.hh>
-
