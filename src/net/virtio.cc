@@ -19,10 +19,6 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
-#ifdef SEASTAR_MODULE
-module;
-#endif
-
 #include <atomic>
 #include <algorithm>
 #include <cstring>
@@ -37,9 +33,6 @@ module;
 #include <net/if.h>
 #include <seastar/util/assert.hh>
 
-#ifdef SEASTAR_MODULE
-module seastar;
-#else
 #include <seastar/net/virtio.hh>
 #include <seastar/core/posix.hh>
 #include <seastar/core/internal/pollable_fd.hh>
@@ -55,8 +48,6 @@ module seastar;
 #include <seastar/net/ip.hh>
 #include <seastar/net/const.hh>
 #include <seastar/net/native-stack.hh>
-#endif
-
 namespace seastar {
 
 using namespace net;

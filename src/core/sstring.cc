@@ -19,16 +19,7 @@
  * Copyright (C) 2020 ScyllaDB
  */
 
-#ifdef SEASTAR_MODULE
-module;
-#include <cstddef>
-#include <new>
-#include <stdexcept>
-module seastar;
-#else
 #include <seastar/core/sstring.hh>
-#endif
-
 using namespace seastar;
 
 [[noreturn]] void internal::throw_bad_alloc() {

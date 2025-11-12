@@ -19,10 +19,6 @@
  * Copyright 2015 Cloudius Systems
  */
 
-#ifdef SEASTAR_MODULE
-module;
-#endif
-
 #include <any>
 #include <filesystem>
 #include <stdexcept>
@@ -47,9 +43,6 @@ module;
 #include <fmt/core.h>
 #include <fmt/ostream.h>
 
-#ifdef SEASTAR_MODULE
-module seastar;
-#else
 #include <seastar/core/loop.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/seastar.hh>
@@ -65,8 +58,6 @@ module seastar;
 #include <seastar/util/std-compat.hh>
 #include <seastar/util/variant_utils.hh>
 #include <seastar/core/fsnotify.hh>
-#endif
-
 namespace seastar {
 
 class net::get_impl {

@@ -19,10 +19,6 @@
  * Copyright 2015 Cloudius Systems
  */
 
-#ifdef SEASTAR_MODULE
-module;
-#endif
-
 #include <cmath>
 #include <algorithm>
 #include <iomanip>
@@ -30,13 +26,8 @@ module;
 #include <sstream>
 #include <string_view>
 
-#ifdef SEASTAR_MODULE
-module seastar;
-#else
 #include <seastar/json/formatter.hh>
 #include <seastar/json/json_elements.hh>
-#endif
-
 namespace seastar {
 
 using namespace std;

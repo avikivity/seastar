@@ -19,21 +19,12 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
-#ifdef SEASTAR_MODULE
-module;
-#endif
-
 #include <boost/algorithm/string.hpp>
 #include <boost/lexical_cast.hpp>
 #include <cctype>
 
-#ifdef SEASTAR_MODULE
-module seastar;
-#else
 #include <seastar/util/conversions.hh>
 #include <seastar/core/print.hh>
-#endif
-
 namespace seastar {
 
 static constexpr struct {

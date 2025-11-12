@@ -19,10 +19,6 @@
  * Copyright (C) 2015 Cloudius Systems, Ltd.
  */
 
-#ifdef SEASTAR_MODULE
-module;
-#endif
-
 #include <iostream>
 #include <map>
 #include <memory>
@@ -46,9 +42,6 @@ module;
 #include <unistd.h>
 
 
-#ifdef SEASTAR_MODULE
-module seastar;
-#else
 #include <seastar/util/log.hh>
 #include <seastar/util/log-cli.hh>
 
@@ -59,8 +52,6 @@ module seastar;
 
 
 #include "core/program_options.hh"
-#endif
-
 using namespace std::chrono_literals;
 
 struct wrapped_log_level {

@@ -20,10 +20,6 @@
  * Copyright 2020 ScyllaDB
  */
 
-#ifdef SEASTAR_MODULE
-module;
-#endif
-
 #include <cstdint>
 #include <list>
 #include <optional>
@@ -33,14 +29,9 @@ module;
 #include <vector>
 #include <sys/statvfs.h>
 
-#ifdef SEASTAR_MODULE
-module seastar;
-#else
 #include <seastar/core/reactor.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/util/file.hh>
-#endif
-
 namespace seastar {
 
 namespace fs = std::filesystem;

@@ -19,10 +19,6 @@
  * Copyright 2014 Cloudius Systems
  */
 
-#ifdef SEASTAR_MODULE
-module;
-#endif
-
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -119,9 +115,6 @@ module;
 #include <typeinfo>
 #endif
 
-#ifdef SEASTAR_MODULE
-module seastar;
-#else
 #include <seastar/core/abort_on_ebadf.hh>
 #include <seastar/core/alien.hh>
 #include <seastar/core/exception_hacks.hh>
@@ -178,7 +171,6 @@ module seastar;
 #include "cgroup.hh"
 #ifdef SEASTAR_HAVE_DPDK
 #include <seastar/core/dpdk_rte.hh>
-#endif
 #endif // SEASTAR_MODULE
 #include <seastar/util/assert.hh>
 #include <seastar/core/internal/systemwide_memory_barrier.hh>

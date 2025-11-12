@@ -16,19 +16,10 @@
  * under the License.
  */
 
-#ifdef SEASTAR_MODULE
-module;
-#endif
-
 #include <stdexcept>
 
-#ifdef SEASTAR_MODULE
-module seastar;
-#else
 #include <seastar/core/signal.hh>
 #include <seastar/core/reactor.hh>
-#endif
-
 namespace seastar {
 
 void handle_signal(int signo, noncopyable_function<void ()>&& handler, bool once) {

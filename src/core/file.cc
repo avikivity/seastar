@@ -19,10 +19,6 @@
  * Copyright 2019 ScyllaDB
  */
 
-#ifdef SEASTAR_MODULE
-module;
-#endif
-
 #include <algorithm>
 #include <atomic>
 #include <coroutine>
@@ -55,9 +51,6 @@ module;
 #include <xfs/xfs.h>
 #undef min
 
-#ifdef SEASTAR_MODULE
-module seastar;
-#else
 #include <seastar/core/internal/read_state.hh>
 #include <seastar/core/internal/uname.hh>
 #include <seastar/core/reactor.hh>
@@ -73,8 +66,6 @@ module seastar;
 #include "core/file-impl.hh"
 #include "core/syscall_result.hh"
 #include "core/thread_pool.hh"
-#endif
-
 namespace seastar {
 
 namespace internal {

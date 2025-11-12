@@ -18,10 +18,6 @@
 /*
  * Copyright 2017 ScyllaDB
  */
-#ifdef SEASTAR_MODULE
-module;
-#endif
-
 #include <link.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -36,15 +32,10 @@ module;
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>
 
-#ifdef SEASTAR_MODULE
-module seastar;
-#else
 #include <seastar/util/backtrace.hh>
 #include <seastar/core/print.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/reactor.hh>
-#endif
-
 namespace seastar {
 
 static int dl_iterate_phdr_callback(struct dl_phdr_info *info, size_t size, void *data)
