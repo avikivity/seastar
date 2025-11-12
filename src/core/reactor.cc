@@ -171,7 +171,7 @@
 #include "cgroup.hh"
 #ifdef SEASTAR_HAVE_DPDK
 #include <seastar/core/dpdk_rte.hh>
-#endif // SEASTAR_MODULE
+#endif // SEASTAR_HAVE_DPDK
 #include <seastar/util/assert.hh>
 #include <seastar/core/internal/systemwide_memory_barrier.hh>
 
