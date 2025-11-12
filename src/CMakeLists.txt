@@ -8,7 +8,7 @@ target_sources (seastar-module
     FILE_SET CXX_MODULES
     TYPE CXX_MODULES
     FILES
-      seastar-module.cppm
+      seastar.cppm
   PRIVATE
     core/alien.cc
     core/app-template.cc

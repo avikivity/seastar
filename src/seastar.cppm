@@ -29,7 +29,8 @@
 module;
 
 // Put all headers not provided by this module into the global module fragment
-// to prevent attachment to the module
+// to prevent attachment to the module. These are dependency headers that
+// we use but don't re-export.
 
 #include <any>
 #include <array>
@@ -140,7 +141,11 @@ module;
 #include <ucontext.h>
 #include <unistd.h>
 
-// Include all Seastar public headers to be exported in the module
+export module seastar;
+
+// Include all Seastar public headers to be exported in the module purview.
+// By including them after "export module", everything they declare in the
+// seastar namespace (and any std:: specializations) will be exported.
 #include <seastar/util/std-compat.hh>
 #include <seastar/core/abortable_fifo.hh>
 #include <seastar/core/abort_on_ebadf.hh>
@@ -293,9 +298,41 @@ module;
 #include <seastar/json/formatter.hh>
 #include <seastar/json/json_elements.hh>
 
-export module seastar;
+module : private;
 
-// Re-export all Seastar namespaces and symbols
-// The headers included above already contain all the declarations,
-// and by including them in the module purview (after the module declaration),
-// everything they declare is automatically exported.
+// Include implementation headers in the private module partition.
+// These are not exported and are only used for the module's implementation.
+#include <seastar/core/internal/read_state.hh>
+#include <seastar/core/internal/buffer_allocator.hh>
+#include <seastar/core/internal/io_intent.hh>
+#include <seastar/core/internal/stall_detector.hh>
+#include <seastar/core/internal/uname.hh>
+
+#include "core/cgroup.hh"
+#include "core/file-impl.hh"
+#include "core/prefault.hh"
+#include "core/program_options.hh"
+#include "core/reactor_backend.hh"
+#include "core/syscall_result.hh"
+#include "core/thread_pool.hh"
+#include "core/scollectd-impl.hh"
+#include "core/vla.hh"
+
+#include <seastar/util/internal/iovec_utils.hh>
+#include <seastar/util/internal/magic.hh>
+#include <seastar/util/function_input_iterator.hh>
+#include <seastar/util/shared_token_bucket.hh>
+#include <seastar/util/transform_iterator.hh>
+
+#include <seastar/net/dhcp.hh>
+#include <seastar/net/native-stack.hh>
+#include <seastar/net/proxy.hh>
+#include <seastar/net/tcp-stack.hh>
+#include <seastar/net/toeplitz.hh>
+#include <seastar/net/virtio.hh>
+
+#include "net/native-stack-impl.hh"
+
+#include <seastar/http/url.hh>
+#include <seastar/http/internal/content_source.hh>
+
