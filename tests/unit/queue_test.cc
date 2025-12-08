@@ -68,7 +68,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_pop_eventually) {
         testlog.trace("pusher: full={} empty={} stop={}", q.full(), q.empty(), stop);
         return q.push_eventually(std::move(data)).then([&] {
             pushed++;
-            if (stop && !q.empty()) {
+            if (stop && pushed > 100) {
                 testlog.debug("pusher done");
                 pusher_done = true;
                 return stop_iteration::yes;
