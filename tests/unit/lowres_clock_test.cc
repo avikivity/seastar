@@ -46,7 +46,7 @@ SEASTAR_TEST_CASE(steady_clock_sanity) {
             auto const elapsed = lowres_clock::now() - t1;
             auto const minimum_elapsed = 0.9 * sleep_duration;
 
-            BOOST_REQUIRE(elapsed >= minimum_elapsed);
+            BOOST_REQUIRE_GE(elapsed, minimum_elapsed);
 
             return make_ready_future<>();
         });
@@ -68,12 +68,12 @@ SEASTAR_TEST_CASE(steady_clock_sanity_preempt) {
     // Yield to the reactor to give it a chance to update the
     // low-resolution clock. Yield just schedules an empty task and
     // waits for it to be executed. There is nothing special about it.
-    co_await ::seastar::yield();
+    co_await ::seastar::check_for_io_immediately();
 
     auto const elapsed = lowres_clock::now() - t1;
     auto const minimum_elapsed = 0.9 * sleep_duration;
 
-    BOOST_REQUIRE(elapsed >= minimum_elapsed);
+    BOOST_REQUIRE_GE(elapsed, minimum_elapsed);
 }
 
 //
