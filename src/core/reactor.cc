@@ -2673,8 +2673,8 @@ bool reactor::task_queue::run_tasks() {
     // Make sure new tasks will inherit our scheduling group
     *internal::current_scheduling_group_ptr() = scheduling_group(_id);
     auto& tasks = _q;
-    while (!tasks.empty()) {
-      auto frag = &tasks.fragments.front();
+    auto frag = tasks.fragments.begin();
+    while (frag != tasks.fragments.end()) {
       // Note: we have to reload frag->start, because queue_fragment::push_front() can update it.
       while (frag->start < frag->end) {
         auto tsk = frag->tasks[frag->start ++];
@@ -2691,10 +2691,11 @@ bool reactor::task_queue::run_tasks() {
         if (internal::scheduler_need_preempt()) {
             if (tasks.size() <= r._cfg.max_task_backlog) {
                 if (frag->start == frag->end) {
-                    tasks.fragments.erase(tasks.fragments.iterator_to(*frag));
-                    delete frag;
-                    frag = nullptr;
+                    auto tmp = &*frag;
+                    frag = tasks.fragments.erase(frag);
+                    delete tmp;
                 }
+                frag = tasks.fragments.end(); // exit outer loop
                 break;
             } else {
                 // While need_preempt() is set, task execution is inefficient due to
@@ -2713,12 +2714,10 @@ bool reactor::task_queue::run_tasks() {
             }
         }
       }
-      if (frag && frag->start == frag->end) {
-          tasks.fragments.erase(tasks.fragments.iterator_to(*frag));
-          delete frag;
-      }
-      if (!frag) {
-          break;
+      if (frag != tasks.fragments.end() && frag->start == frag->end) {
+          auto tmp = &*frag;
+          frag = tasks.fragments.erase(frag);
+          delete tmp;
       }
     }
 
