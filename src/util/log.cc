@@ -374,7 +374,7 @@ logger::do_log(log_level level, log_writer& writer) {
 }
 
 void logger::failed_to_log(std::exception_ptr ex,
-                           fmt::string_view fmt,
+                           std::string_view fmt,
                            std::source_location loc) noexcept
 {
     try {

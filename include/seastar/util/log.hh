@@ -46,7 +46,7 @@ class logger_registry;
 
 namespace internal {
 
-// Get a format_info's format string as a string_view.
+// Get a format_info's format string as a std::string_view.
 //
 // fmt 12 deprecates the implicit basic_format_string -> basic_string_view
 // conversion in favour of basic_format_string::get(), which was only added
@@ -57,11 +57,12 @@ namespace internal {
 // both the compile-time fmt::format_string<Args...> and the runtime
 // std::string_view without the caller needing to know which is in play.
 template <typename FormatString>
-fmt::string_view format_string_view(const FormatString& format) noexcept {
+std::string_view format_string_view(const FormatString& format) noexcept {
 #if defined(SEASTAR_LOGGER_COMPILE_TIME_FMT) && FMT_VERSION >= 100000
-    return format.get();
+    auto view = format.get();
+    return std::string_view(view.data(), view.size());
 #else
-    return fmt::string_view(format);
+    return std::string_view(format);
 #endif
 }
 
@@ -192,7 +193,7 @@ private:
     // We can't use an std::function<> as it potentially allocates.
     void do_log(log_level level, log_writer& writer);
     void failed_to_log(std::exception_ptr ex,
-                       fmt::string_view fmt,
+                       std::string_view fmt,
                        std::source_location loc) noexcept;
 
     class silencer {
