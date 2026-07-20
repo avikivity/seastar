@@ -934,9 +934,18 @@ using seastar::json::date_time;
 
 }
 
+export namespace seastar::http {
+
+
+}
+
 export namespace seastar::httpd {
 
 using seastar::httpd::path_description;
+using seastar::httpd::bad_param_exception;
+using seastar::httpd::server_error_exception;
+using seastar::httpd::not_found_exception;
+using seastar::httpd::const_req;
 
 }
 
