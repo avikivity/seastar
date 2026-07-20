@@ -927,6 +927,19 @@ struct formatter<std::exception_ptr>;
 
 }
 
+export namespace seastar::json {
+
+using seastar::json::json_list;
+using seastar::json::date_time;
+
+}
+
+export namespace seastar::httpd {
+
+using seastar::httpd::path_description;
+
+}
+
 export namespace std {
 
 using std::hash;
