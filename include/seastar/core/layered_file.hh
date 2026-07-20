@@ -43,7 +43,7 @@ public:
     /// Constructs a layered file. This sets up the underlying_file() method
     /// and initializes alignment constants to be the same as the underlying file.
     explicit layered_file_impl(file underlying_file) noexcept
-            : _underlying_file(std::move(underlying_file)) {
+            : file_impl(), _underlying_file(std::move(underlying_file)) {
         _memory_dma_alignment = _underlying_file.memory_dma_alignment();
         _disk_read_dma_alignment = _underlying_file.disk_read_dma_alignment();
         _disk_write_dma_alignment = _underlying_file.disk_write_dma_alignment();

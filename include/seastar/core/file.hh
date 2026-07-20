@@ -220,6 +220,12 @@ protected:
 public:
     virtual ~file_impl() {}
 
+    file_impl() = default;
+    file_impl(const file_impl&) = default;
+    file_impl& operator=(const file_impl&) = default;
+    file_impl(file_impl&&) = default;
+    file_impl& operator=(file_impl&&) = default;
+
     virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent*) = 0;
     virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) = 0;
     virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent*) = 0;
