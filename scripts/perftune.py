@@ -12,6 +12,8 @@ import math
 import multiprocessing
 import os
 import pathlib
+import pwd
+import grp
 import pyudev
 import re
 import shutil
@@ -344,6 +346,76 @@ def check_sysfs_numa_topology_is_valid():
         if os.path.exists("/sys/devices/system/cpu/cpu0/topology/core_siblings") or os.path.exists("/sys/devices/system/cpu/cpu0/topology/thread_siblings"):
             return True
     return False
+
+memory_size_suffixes = {'k': 10, 'K': 10, 'M': 20, 'G': 30, 'T': 40}
+
+def parse_memory_size(value):
+    """
+    Parse a memory size the way seastar's --memory option does, e.g. '64G', '512MiB', '1024'.
+    :param value: the string to parse
+    :return: the size in bytes
+    """
+    value = str(value).strip()
+    for unit in ('iB', 'i', 'B'):
+        if value.endswith(unit):
+            value = value[:-len(unit)]
+            break
+
+    shift = 0
+    if value and value[-1] in memory_size_suffixes:
+        shift = memory_size_suffixes[value[-1]]
+        value = value[:-1]
+
+    try:
+        return int(value) << shift
+    except ValueError:
+        raise Exception("Bad memory size: {}".format(value))
+
+def cpu_mask_to_cpu_ids(cpu_mask):
+    """
+    Convert an hwloc-calc style CPU mask into the list of CPU ids it selects.
+    The mask is a comma separated list of 32 bit hex values, most significant
+    first, where an empty component stands for zero, e.g. '0xffff,,0x00ff'.
+    :param cpu_mask: hwloc-calc generated CPU mask
+    :return: a sorted list of CPU ids
+    """
+    groups = cpu_mask.split(',')
+    cpu_ids = []
+    for i, group in enumerate(groups):
+        base = (len(groups) - 1 - i) * 32
+        value = int(group, 16) if group else 0
+        cpu_ids.extend(base + bit for bit in range(32) if value & (1 << bit))
+
+    return sorted(cpu_ids)
+
+def parse_cpu_list(cpu_list):
+    """
+    Parse a sysfs style CPU list, e.g. '0-3,8,12-15'.
+    :param cpu_list: the string to parse
+    :return: a set of CPU ids
+    """
+    cpu_ids = set()
+    for part in cpu_list.strip().split(','):
+        if not part:
+            continue
+        if '-' in part:
+            first, last = part.split('-')
+            cpu_ids.update(range(int(first), int(last) + 1))
+        else:
+            cpu_ids.add(int(part))
+
+    return cpu_ids
+
+def numa_node_to_cpu_ids():
+    """
+    :return: a dictionary mapping each NUMA node id to the set of CPU ids it owns
+    """
+    result = {}
+    for cpu_list_file in glob.glob("/sys/devices/system/node/node*/cpulist"):
+        node_id = int(re.search(r'node(\d+)', cpu_list_file).group(1))
+        result[node_id] = parse_cpu_list("".join(readlines(cpu_list_file)))
+
+    return result
 
 ################################################################################
 class PerfTunerBase(metaclass=abc.ABCMeta):
@@ -1844,10 +1916,378 @@ class DiskPerfTuner(PerfTunerBase):
             self.__tune_disk(disk)
 
 ################################################################################
+class HugepagesPerfTuner(PerfTunerBase):
+    """
+    Reserves huge pages for a seastar application and hands them to it through a
+    set of hugetlbfs mounts - one per huge page size - rooted at
+    '<hugepages_root>/<hugepages_prefix>'. The application is then started with
+    '--hugepages <that directory>' and backs each shard with the largest huge
+    pages available, using smaller ones for the remainder.
+
+    Every application gets its own prefix, so that several of them can be tuned
+    independently and coexist on the same machine. The size of the global huge
+    page pool is the sum of what all known prefixes asked for; the requests are
+    remembered in 'state_root' so that tuning one prefix doesn't take pages away
+    from the others.
+
+    Note that this makes perftune.py the owner of the huge page pool for the page
+    sizes it uses: huge pages reserved by other means may be released.
+    """
+
+    hugepages_sysfs_root = "/sys/kernel/mm/hugepages"
+    node_sysfs_root = "/sys/devices/system/node"
+    state_root = "/run/seastar-perftune/hugepages"
+
+    # Huge pages smaller than this buy too little to be worth the book keeping,
+    # and seastar ignores them anyway.
+    min_page_size = 2 << 20
+
+    # Granularity at which seastar rounds each shard's memory down, see
+    # seastar::memory::internal::per_shard_memory().
+    shard_memory_granularity = 2 << 20
+
+    def __init__(self, args):
+        super().__init__(args)
+
+        self.__prefix = args.hugepages_prefix
+        if not re.match(r'^[\w.-]+$', self.__prefix):
+            raise Exception("Bad huge pages prefix '{}': expected a file name".format(self.__prefix))
+
+        self.__mounts_path = os.path.join(args.hugepages_root, self.__prefix)
+        self.__state_file = os.path.join(HugepagesPerfTuner.state_root, "{}.yaml".format(self.__prefix))
+        self.__uid, self.__gid = HugepagesPerfTuner.__resolve_user(args.hugepages_user)
+
+#### Public methods ##########################
+    @property
+    def mounts_path(self):
+        """
+        :return: the directory to pass to the seastar application's --hugepages option
+        """
+        return self.__mounts_path
+
+    def tune(self):
+        if self.args.release_hugepages:
+            self.__release()
+            perftune_print("Released the huge pages of prefix '{}'".format(self.__prefix))
+            return
+
+        reservation = self.__plan()
+        # Drop our previous mounts first: their min_size reservations would keep
+        # the pools from being resized.
+        self.__remove_mounts()
+        reservation = self.__reserve(reservation)
+        self.__save_state(reservation)
+        self.__setup_mounts(reservation)
+        perftune_print("Huge pages for prefix '{}' are ready, run the application with --hugepages {}".format(
+            self.__prefix, self.mounts_path))
+
+#### Protected methods ##########################
+    def _get_irqs(self):
+        return []
+
+#### Private methods ############################
+    @staticmethod
+    def __resolve_user(user):
+        """
+        Resolve a 'user' or 'user:group' string into a (uid, gid) pair. The group
+        defaults to the user's primary group.
+        """
+        user, _, group = user.partition(':')
+        try:
+            pw = pwd.getpwnam(user) if not user.isdigit() else pwd.getpwuid(int(user))
+        except KeyError:
+            raise Exception("Unknown huge pages user: {}".format(user))
+
+        if not group:
+            return pw.pw_uid, pw.pw_gid
+
+        try:
+            gid = int(group) if group.isdigit() else grp.getgrnam(group).gr_gid
+        except KeyError:
+            raise Exception("Unknown huge pages group: {}".format(group))
+
+        return pw.pw_uid, gid
+
+    @staticmethod
+    def __available_page_sizes():
+        """
+        :return: the huge page sizes the kernel supports, in bytes, largest first
+        """
+        sizes = []
+        for d in glob.glob(os.path.join(HugepagesPerfTuner.hugepages_sysfs_root, "hugepages-*kB")):
+            size = int(re.search(r'hugepages-(\d+)kB', d).group(1)) * 1024
+            if size >= HugepagesPerfTuner.min_page_size:
+                sizes.append(size)
+
+        return sorted(sizes, reverse=True)
+
+    def __shards_per_node(self):
+        """
+        Work out how many shards will land on each NUMA node. The shards are
+        distributed over the compute CPU set exactly the way seastar does it, by
+        asking hwloc for a single CPU per shard.
+        :return: a dictionary mapping a NUMA node id to a number of shards
+        """
+        compute_cpu_ids = cpu_mask_to_cpu_ids(self.compute_cpu_mask)
+        nr_shards = self.args.smp if self.args.smp else len(compute_cpu_ids)
+        if nr_shards <= 0:
+            raise Exception("Number of shards must be positive, got {}".format(nr_shards))
+
+        cpu_ids_by_node = numa_node_to_cpu_ids()
+        shards_per_node = {}
+        for mask in run_hwloc_distrib([str(nr_shards), '--single', '--restrict', self.compute_cpu_mask]):
+            cpu_ids = cpu_mask_to_cpu_ids(mask)
+            if not cpu_ids:
+                continue
+            cpu_id = cpu_ids[0]
+            node_id = next((n for n, cpus in cpu_ids_by_node.items() if cpu_id in cpus), 0)
+            shards_per_node[node_id] = shards_per_node.get(node_id, 0) + 1
+
+        return shards_per_node
+
+    def __plan(self):
+        """
+        Decide how many huge pages of each size to reserve on each NUMA node.
+
+        Each shard gets the same amount of memory, made up of as many of the
+        largest pages as fit, then of the next size down, and so on - the same
+        way the seastar allocator consumes them.
+        :return: a dictionary mapping a NUMA node id to a {page size: count} dictionary
+        """
+        if not self.args.memory:
+            raise Exception("--memory is required in order to reserve huge pages")
+
+        page_sizes = HugepagesPerfTuner.__available_page_sizes()
+        if not page_sizes:
+            raise Exception("The kernel does not support any huge page size of at least {} bytes".format(
+                HugepagesPerfTuner.min_page_size))
+
+        shards_per_node = self.__shards_per_node()
+        nr_shards = sum(shards_per_node.values())
+        total_memory = parse_memory_size(self.args.memory)
+        memory_per_shard = (total_memory // nr_shards) & ~(HugepagesPerfTuner.shard_memory_granularity - 1)
+        if memory_per_shard < min(page_sizes):
+            raise Exception("{} of memory over {} shards is too little for {} byte huge pages".format(
+                self.args.memory, nr_shards, min(page_sizes)))
+
+        pages_per_shard = {}
+        remaining = memory_per_shard
+        for page_size in page_sizes:
+            count = remaining // page_size
+            if count:
+                pages_per_shard[page_size] = count
+                remaining -= count * page_size
+
+        if remaining:
+            perftune_print("Warning: {} bytes per shard can't be backed by huge pages and will use ordinary pages".format(
+                remaining))
+
+        return {node_id: {page_size: count * nr_node_shards for page_size, count in pages_per_shard.items()}
+                for node_id, nr_node_shards in shards_per_node.items()}
+
+    def __save_state(self, reservation):
+        """
+        Remember what this prefix asked for, so that a later run for a different
+        prefix keeps it in the pool.
+        """
+        state = {'mounts_path': self.mounts_path,
+                 'reservation': {str(node_id): {str(page_size): count for page_size, count in sizes.items()}
+                                 for node_id, sizes in reservation.items()}}
+        if dry_run_mode:
+            perftune_print("Would record the reservation of prefix '{}' in {}".format(self.__prefix, self.__state_file))
+            return
+
+        os.makedirs(HugepagesPerfTuner.state_root, exist_ok=True)
+        with open(self.__state_file, 'w') as f:
+            yaml.dump(state, f, default_flow_style=False)
+
+    def __all_reservations(self, skip_self=False):
+        """
+        Sum up the reservations of every known prefix.
+        :param skip_self: ignore this prefix's own, about to be replaced, reservation
+        :return: a dictionary mapping a NUMA node id to a {page size: count} dictionary
+        """
+        total = {}
+
+        def add(reservation):
+            for node_id, sizes in reservation.items():
+                per_node = total.setdefault(int(node_id), {})
+                for page_size, count in sizes.items():
+                    page_size = int(page_size)
+                    per_node[page_size] = per_node.get(page_size, 0) + int(count)
+
+        for state_file in glob.glob(os.path.join(HugepagesPerfTuner.state_root, "*.yaml")):
+            if skip_self and os.path.abspath(state_file) == os.path.abspath(self.__state_file):
+                continue
+            try:
+                with open(state_file, 'r') as f:
+                    add((yaml.safe_load(f) or {}).get('reservation', {}))
+            except Exception as e:
+                perftune_print("Warning: ignoring unreadable huge pages state file {}: {}".format(state_file, e))
+
+        return total
+
+    @staticmethod
+    def __nr_hugepages_file(node_id, page_size):
+        """
+        :return: the sysfs file controlling the number of huge pages of a given
+                 size on a given NUMA node, or the machine wide one if the kernel
+                 doesn't offer per node control
+        """
+        per_node = os.path.join(HugepagesPerfTuner.node_sysfs_root, "node{}".format(node_id),
+                                "hugepages", "hugepages-{}kB".format(page_size // 1024), "nr_hugepages")
+        if os.path.exists(per_node):
+            return per_node
+
+        return os.path.join(HugepagesPerfTuner.hugepages_sysfs_root,
+                            "hugepages-{}kB".format(page_size // 1024), "nr_hugepages")
+
+    @staticmethod
+    def __compact_memory():
+        """
+        Ask the kernel to defragment memory, giving gigantic pages a chance of
+        finding the physically contiguous memory they need.
+        """
+        fwriteln_and_log("/proc/sys/vm/compact_memory", "1", log_errors=False)
+
+    @staticmethod
+    def __set_nr_hugepages(node_id, page_size, count):
+        """
+        Ask the kernel for @count huge pages of @page_size on @node_id. If it
+        can't hand out that many, defragment memory and ask again - gigantic
+        pages in particular are hard to come by on a machine that has been up
+        for a while.
+        :return: the number of huge pages the pool ended up with
+        """
+        fname = HugepagesPerfTuner.__nr_hugepages_file(node_id, page_size)
+        got = 0
+        for _ in range(2):
+            fwriteln_and_log(fname, "{}".format(count))
+            if dry_run_mode:
+                return count
+
+            got = int("".join(readlines(fname)) or 0)
+            if got >= count:
+                break
+            HugepagesPerfTuner.__compact_memory()
+
+        return got
+
+    def __reserve(self, reservation):
+        """
+        Grow the huge page pools so that they hold this prefix's reservation on top
+        of what the other prefixes already asked for.
+
+        Gigantic pages need physically contiguous memory, so we ask for the largest
+        sizes first, while memory is least fragmented; whatever the kernel can't
+        give us is asked for again in the next size down, so that a shard ends up
+        with as few, and as large, pages as the machine can manage.
+        :param reservation: the desired reservation, as returned by __plan()
+        :return: the reservation we actually got
+        """
+        others = self.__all_reservations(skip_self=True)
+        page_sizes = HugepagesPerfTuner.__available_page_sizes()
+        actual = {}
+
+        for node_id in sorted(reservation.keys()):
+            got_by_size = {}
+            # Bytes that a larger page size couldn't cover, to be retried with
+            # the next smaller one.
+            carry = 0
+            for page_size in page_sizes:
+                want = reservation[node_id].get(page_size, 0) + carry // page_size
+                carry %= page_size
+                if not want:
+                    continue
+
+                other = others.get(node_id, {}).get(page_size, 0)
+                got = max(0, HugepagesPerfTuner.__set_nr_hugepages(node_id, page_size, other + want) - other)
+                if got:
+                    got_by_size[page_size] = got
+                if got < want:
+                    carry += (want - got) * page_size
+
+            if carry:
+                perftune_print("Warning: {} bytes on NUMA node {} could not be backed by huge pages. Memory is "
+                               "probably too fragmented; consider reserving them on the kernel command line "
+                               "(hugepagesz=/hugepages=)".format(carry, node_id))
+            actual[node_id] = got_by_size
+
+        return actual
+
+    def __resize_pools(self):
+        """
+        Shrink the huge page pools back to the sum of what the remaining prefixes
+        asked for. Pools nobody asks for any more are emptied.
+        """
+        total = self.__all_reservations()
+        for node_id in sorted(numa_node_to_cpu_ids().keys() | total.keys()):
+            for page_size in HugepagesPerfTuner.__available_page_sizes():
+                count = total.get(node_id, {}).get(page_size, 0)
+                HugepagesPerfTuner.__set_nr_hugepages(node_id, page_size, count)
+
+    def __mount_path(self, page_size):
+        return os.path.join(self.mounts_path, "{}kB".format(page_size // 1024))
+
+    def __setup_mounts(self, reservation):
+        """
+        Mount one hugetlbfs per huge page size under the prefix's directory, sized
+        to this prefix's share of the pool and owned by the user that will run the
+        application. Mounts left over from a previous, differently sized, run are
+        removed.
+        """
+        bytes_per_size = {}
+        for sizes in reservation.values():
+            for page_size, count in sizes.items():
+                bytes_per_size[page_size] = bytes_per_size.get(page_size, 0) + count * page_size
+
+        run_one_command(['mkdir', '-p', self.mounts_path])
+        for page_size, nr_bytes in sorted(bytes_per_size.items(), reverse=True):
+            path = self.__mount_path(page_size)
+            # 'min_size' reserves this prefix's share of the pool for as long as
+            # the mount lives, so that another prefix can't take it away.
+            options = "pagesize={},size={},min_size={},uid={},gid={},mode=0700".format(
+                page_size, nr_bytes, nr_bytes, self.__uid, self.__gid)
+            run_one_command(['mkdir', '-p', path])
+            if os.path.ismount(path):
+                run_one_command(['mount', '-o', "remount,{}".format(options), path])
+            else:
+                run_one_command(['mount', '-t', 'hugetlbfs', '-o', options, 'none', path])
+            # The mount options only apply to the root inode of a fresh mount, so
+            # make sure a remounted or pre-existing one ends up owned by the user too.
+            run_one_command(['chown', "{}:{}".format(self.__uid, self.__gid), path])
+            run_one_command(['chmod', '0700', path])
+
+        self.__remove_mounts(keep=set(bytes_per_size.keys()))
+
+    def __remove_mounts(self, keep=frozenset()):
+        for path in glob.glob(os.path.join(self.mounts_path, "*kB")):
+            page_size = int(re.search(r'(\d+)kB', os.path.basename(path)).group(1)) * 1024
+            if page_size in keep:
+                continue
+            if os.path.ismount(path):
+                run_one_command(['umount', path], check=False)
+            run_one_command(['rmdir', path], check=False)
+
+    def __release(self):
+        """
+        Give this prefix's huge pages back: unmount everything under it, forget its
+        reservation and shrink the pools accordingly.
+        """
+        self.__remove_mounts()
+        run_one_command(['rmdir', self.mounts_path], check=False)
+        if dry_run_mode:
+            perftune_print("Would remove {}".format(self.__state_file))
+        elif os.path.exists(self.__state_file):
+            os.unlink(self.__state_file)
+        self.__resize_pools()
+
+#################################################
 class TuneModes(enum.Enum):
     disks = 0
     net = 1
     system = 2
+    hugepages = 3
 
     @staticmethod
     def names():
@@ -1866,6 +2306,19 @@ This script will:
     - Configure various system parameters in /proc/sys.
     - Distribute the IRQs (using SMP affinity configuration) among CPUs according to the configuration mode (see below)
       or an 'irq_cpu_mask' value.
+    - Reserve huge pages for the seastar application and hand them to it via hugetlbfs mounts ('hugepages' tune mode).
+
+Huge pages ('--tune=hugepages'):
+
+ Given the shard and memory configuration the seastar application will be started with ('--smp' and '--memory',
+ matching the application's own options), reserve enough huge pages to back all of it, preferring the largest
+ page size the kernel offers (e.g. 1GB on x86, or 512MB on aarch64 with 64kB base pages) and using smaller pages
+ for the remainder. The pages are exposed through one hugetlbfs mount per page size, owned by '--hugepages-user',
+ under '<--hugepages-root>/<--hugepages-prefix>'. Start the application with '--hugepages <that directory>'
+ (run with '--get-hugepages-path' to print it).
+
+ Each application gets its own '--hugepages-prefix', so several of them can be tuned independently on the same
+ machine. Use '--release-hugepages' to give a prefix's pages back.
 
 As a result some of the CPUs may be destined to only handle the IRQs and taken out of the CPU set
 that should be used to run the seastar application ("compute CPU set").
@@ -1920,6 +2373,13 @@ argp.add_argument('--irq-core-auto-detection-ratio', help="Use a given ratio for
                                                           "Default is 16",
                   type=int, default=16, dest='cores_per_irq_core')
 argp.add_argument('--tcp-mem-fraction', default=default_tcp_mem_fraction, type=float, help="Fraction of total memory to allocate for TCP buffers")
+argp.add_argument('--memory', help="amount of memory the seastar application will be given (the value of its --memory option, e.g. 64G); required by the 'hugepages' tune mode")
+argp.add_argument('--smp', type=int, help="number of shards the seastar application will run (the value of its --smp option), by default one per compute CPU")
+argp.add_argument('--hugepages-prefix', default='default', help="name identifying the seastar application whose huge pages are being tuned, so that several applications can coexist. Default is 'default'")
+argp.add_argument('--hugepages-user', default=os.environ.get('SUDO_USER') or 'root', help="user (or user:group) that will run the seastar application, and which the huge pages are given to")
+argp.add_argument('--hugepages-root', default='/run/seastar/hugepages', help="directory under which the per-prefix hugetlbfs mounts are created")
+argp.add_argument('--release-hugepages', action='store_true', help="release the huge pages of the given prefix instead of reserving them")
+argp.add_argument('--get-hugepages-path', action='store_true', help="print the directory to pass to the seastar application's --hugepages option")
 
 def parse_cpu_mask_from_yaml(y, field_name, fname):
     hex_32bit_pattern='0x[0-9a-fA-F]{1,8}'
@@ -2004,6 +2464,21 @@ def parse_options_file(prog_args):
     if 'irq_core_auto_detection_ratio' in y:
         prog_args.cores_per_irq_core = int(y['irq_core_auto_detection_ratio'])
 
+    if 'memory' in y and not prog_args.memory:
+        prog_args.memory = "{}".format(y['memory'])
+
+    if 'smp' in y and not prog_args.smp:
+        prog_args.smp = int(y['smp'])
+
+    if 'hugepages_prefix' in y:
+        prog_args.hugepages_prefix = "{}".format(y['hugepages_prefix'])
+
+    if 'hugepages_user' in y:
+        prog_args.hugepages_user = "{}".format(y['hugepages_user'])
+
+    if 'hugepages_root' in y:
+        prog_args.hugepages_root = "{}".format(y['hugepages_root'])
+
 def dump_config(prog_args):
     prog_options = {}
 
@@ -2044,6 +2519,17 @@ def dump_config(prog_args):
 
     prog_options['irq_core_auto_detection_ratio'] = prog_args.cores_per_irq_core
 
+    if prog_args.memory:
+        prog_options['memory'] = prog_args.memory
+
+    if prog_args.smp:
+        prog_options['smp'] = prog_args.smp
+
+    if TuneModes.hugepages.name in (prog_args.tune or []):
+        prog_options['hugepages_prefix'] = prog_args.hugepages_prefix
+        prog_options['hugepages_user'] = prog_args.hugepages_user
+        prog_options['hugepages_root'] = prog_args.hugepages_root
+
     perftune_print(yaml.dump(prog_options, default_flow_style=False))
 ################################################################################
 
@@ -2068,6 +2554,12 @@ if args.mode and args.irq_cpu_mask:
 if args.cores_per_irq_core < PerfTunerBase.min_cores_per_irq_core():
     sys.exit(f"ERROR: irq_core_auto_detection_ratio value must be greater or equal than "
              f"{PerfTunerBase.min_cores_per_irq_core()}")
+
+if args.get_hugepages_path and TuneModes.hugepages.name not in args.tune:
+    sys.exit("ERROR: --get-hugepages-path requires --tune=hugepages.")
+
+if TuneModes.hugepages.name in args.tune and not (args.memory or args.release_hugepages or args.get_hugepages_path):
+    sys.exit("ERROR: --tune=hugepages requires --memory, the amount of memory the seastar application will use.")
 
 # set default values #####################
 if not args.nics:
@@ -2097,7 +2589,12 @@ try:
     if TuneModes.system.name in args.tune:
         tuners.append(SystemPerfTuner(args))
 
-    if args.get_cpu_mask or args.get_cpu_mask_quiet:
+    if TuneModes.hugepages.name in args.tune:
+        tuners.append(HugepagesPerfTuner(args))
+
+    if args.get_hugepages_path:
+        perftune_print(next(t for t in tuners if isinstance(t, HugepagesPerfTuner)).mounts_path)
+    elif args.get_cpu_mask or args.get_cpu_mask_quiet:
         # Print the compute mask from the first tuner - it's going to be the same in all of them
         perftune_print(tuners[0].compute_cpu_mask)
     elif args.get_irq_cpu_mask:

@@ -31,3 +31,11 @@
 
 # write_back_cache: false
 
+
+# Huge pages ('tune: [hugepages]'): the shard and memory configuration the seastar
+# application will be started with, and who to give the huge pages to.
+#memory: '240G'
+#smp: 16
+#hugepages_prefix: 'my-app'
+#hugepages_user: 'seastar-app'
+#hugepages_root: '/run/seastar/hugepages'
