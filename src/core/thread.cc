@@ -215,8 +215,9 @@ thread_context::thread_context(thread_attributes attr, noncopyable_function<void
 
 thread_context::~thread_context() {
 #ifdef SEASTAR_THREAD_STACK_GUARDS
+    // See make_stack(): the guard is absent if the stack lives in huge pages.
     auto mp_result = mprotect(_stack.get(), getpagesize(), PROT_READ | PROT_WRITE);
-    SEASTAR_ASSERT(mp_result == 0);
+    SEASTAR_ASSERT(mp_result == 0 || errno == EINVAL);
 #endif
     _all_threads.erase(_all_threads.iterator_to(*this));
 }
@@ -243,8 +244,11 @@ thread_context::make_stack(size_t stack_size) {
 #endif
 
 #ifdef SEASTAR_THREAD_STACK_GUARDS
+    // Huge pages cannot be mprotect()ed at a sub-huge-page granularity, so a
+    // heap backed by hugetlbfs (see --hugepages) simply runs without stack
+    // guards.
     auto mp_status = mprotect(stack.get(), page_size, PROT_READ);
-    throw_system_error_on(mp_status != 0, "mprotect");
+    throw_system_error_on(mp_status != 0 && errno != EINVAL, "mprotect");
 #endif
 
     return stack;
