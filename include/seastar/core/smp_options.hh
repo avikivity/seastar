@@ -51,7 +51,10 @@ struct smp_options : public program_options::option_group {
     /// Memory reserved to the OS and other processes (if \ref memory not specified),
     /// and is not used by seastar.
     program_options::value<std::string> reserve_memory;
-    /// Path to accessible hugetlbfs mount (typically /dev/hugepages/something).
+    /// Path to an accessible hugetlbfs mount (typically /dev/hugepages/something),
+    /// or to a directory holding one hugetlbfs mount per huge page size, as set up
+    /// by `perftune.py --tune=hugepages`. In the latter case memory is backed by the
+    /// largest huge pages available, falling back to smaller ones for the remainder.
     program_options::value<std::string> hugepages;
     /// Lock all memory (prevents swapping).
     program_options::value<bool> lock_memory;

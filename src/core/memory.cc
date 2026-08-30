@@ -96,8 +96,10 @@
 #include <utility>
 #include <boost/intrusive/list.hpp>
 #include <sys/mman.h>
+#include <sys/statfs.h>
 #include <sys/syscall.h>
 #include <linux/mempolicy.h>
+#include <filesystem>
 
 #endif // !defined(SEASTAR_DEFAULT_ALLOCATOR)
 
@@ -114,6 +116,7 @@
 #include <seastar/core/posix.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/util/backtrace.hh>
+#include <seastar/util/internal/magic.hh>
 #endif
 
 #ifdef SEASTAR_DEBUG
@@ -631,7 +634,7 @@ struct cpu_pages {
     void set_min_free_pages(size_t pages);
     void resize(size_t new_size, allocate_system_memory_fn alloc_sys_mem);
     void do_resize(size_t new_size, allocate_system_memory_fn alloc_sys_mem);
-    void replace_memory_backing(allocate_system_memory_fn alloc_sys_mem);
+    void replace_memory_backing(allocate_system_memory_fn alloc_sys_mem, size_t size);
     void check_large_allocation(size_t size);
     void warn_large_allocation(size_t size);
     allocation_site_ptr add_alloc_site(size_t allocated_size);
@@ -1266,30 +1269,206 @@ static allocate_anonymous_memory(void* where, size_t how_much) {
             MAP_PRIVATE | MAP_FIXED);
 }
 
-mmap_area
-allocate_hugetlbfs_memory(file_desc& fd, void* where, size_t how_much) {
-    auto pos = fd.size();
-    fd.truncate(pos + how_much);
-    auto ret = fd.map(
-            how_much,
-            PROT_READ | PROT_WRITE,
-            MAP_SHARED | MAP_POPULATE | (where ? MAP_FIXED : 0),
-            pos,
-            where);
-    return ret;
+// The smallest huge page size we bother with.  Smaller huge pages (e.g. the
+// 64kB contiguous-PTE pages on aarch64) buy little, and using them would make
+// the allocator's book-keeping needlessly fine grained.
+static constexpr size_t min_usable_huge_page_size = size_t(2) << 20;
+
+// A hugetlbfs mount we can allocate memory from, together with the size of the
+// huge pages it hands out.  A Seastar application can be given several of these
+// (one per huge page size, see open_hugetlbfs_pools()), and the allocator will
+// prefer the largest pages that fit.
+struct hugetlbfs_pool {
+    size_t page_size;
+    lw_shared_ptr<file_desc> fd;
+};
+
+// Set by allocate_hugepage_memory() to the number of bytes it could not back
+// with huge pages.  Reported by configure() once the heap is usable again.
+static thread_local size_t hugepage_shortfall = 0;
+
+// Returns the huge page size of the filesystem @path lives on, or nullopt if it
+// is not a hugetlbfs mount.
+static
+std::optional<size_t>
+hugetlbfs_page_size(const std::string& path) {
+    struct ::statfs sb;
+    if (::statfs(path.c_str(), &sb) != 0) {
+        return std::nullopt;
+    }
+    if (static_cast<unsigned long>(sb.f_type) != seastar::internal::fs_magic::hugetlbfs) {
+        return std::nullopt;
+    }
+    // hugetlbfs reports its huge page size as the block size.
+    return static_cast<size_t>(sb.f_bsize);
 }
 
-void cpu_pages::replace_memory_backing(allocate_system_memory_fn alloc_sys_mem) {
+// Opens the hugetlbfs mounts reachable from @path.
+//
+// @path may either be a hugetlbfs mount itself, or a directory holding one
+// hugetlbfs mount per huge page size (this is what perftune.py --tune=hugepages
+// sets up, so that a shard can be backed by 1GB pages with the tail made up of
+// smaller ones).  The pools are returned largest page size first.
+static
+std::vector<hugetlbfs_pool>
+open_hugetlbfs_pools(const std::string& path) {
+    std::vector<hugetlbfs_pool> pools;
+    auto add = [&] (const std::string& mount) {
+        auto ps = hugetlbfs_page_size(mount);
+        if (!ps || *ps < min_usable_huge_page_size) {
+            return;
+        }
+        pools.push_back(hugetlbfs_pool{*ps, make_lw_shared<file_desc>(file_desc::temporary(mount))});
+    };
+    if (hugetlbfs_page_size(path)) {
+        add(path);
+    } else {
+        std::error_code ec;
+        auto dir = std::filesystem::directory_iterator(path, ec);
+        if (ec) {
+            throw std::runtime_error(fmt::format("{} is neither a hugetlbfs mount nor a directory of hugetlbfs mounts: {}",
+                    path, ec.message()));
+        }
+        for (auto& entry : dir) {
+            std::error_code ignored;
+            if (entry.is_directory(ignored)) {
+                add(entry.path().native());
+            }
+        }
+    }
+    if (pools.empty()) {
+        throw std::runtime_error(fmt::format("no usable hugetlbfs mount found at {}", path));
+    }
+    std::sort(pools.begin(), pools.end(), [] (const hugetlbfs_pool& a, const hugetlbfs_pool& b) {
+        return a.page_size > b.page_size;
+    });
+    return pools;
+}
+
+// Maps @how_much bytes of hugetlbfs from @fd at @where, or returns false if the
+// pool cannot satisfy the request.
+static
+bool
+try_map_hugetlbfs(int fd, char* where, size_t how_much) {
+    struct ::stat st;
+    if (::fstat(fd, &st) != 0) {
+        return false;
+    }
+    auto pos = static_cast<size_t>(st.st_size);
+    if (::ftruncate(fd, pos + how_much) != 0) {
+        return false;
+    }
+    auto p = ::mmap(where, how_much,
+            PROT_READ | PROT_WRITE,
+            MAP_SHARED | MAP_POPULATE | MAP_FIXED,
+            fd, pos);
+    if (p == MAP_FAILED) {
+        // Undo the extension, so that a smaller retry maps at the same offset.
+        ::ftruncate(fd, pos);
+        return false;
+    }
+    return true;
+}
+
+// How much unused space the hugetlbfs mount backing @fd still has.  Mounts
+// created without a size= option don't impose a limit, in which case we return
+// nullopt.
+static
+std::optional<size_t>
+hugetlbfs_free_bytes(int fd) {
+    struct ::statfs sb;
+    if (::fstatfs(fd, &sb) != 0) {
+        return std::nullopt;
+    }
+    if (sb.f_blocks == 0 || sb.f_bfree > sb.f_blocks) {
+        // No size= limit on this mount, so it is only bounded by the global pool.
+        return std::nullopt;
+    }
+    return static_cast<size_t>(sb.f_bfree) * static_cast<size_t>(sb.f_bsize);
+}
+
+// Maps [where, where + how_much) using the largest huge pages available,
+// falling back to progressively smaller ones as the pools are exhausted, and
+// finally to ordinary anonymous memory.
+//
+// @where is aligned to at least 4GB (it is a shard's memory base, see
+// cpu_id_shift), and each pool is drained in whole multiples of its own page
+// size, so the cursor stays aligned to every remaining (smaller) page size.
+//
+// Note this runs from replace_memory_backing(), that is, while the shard's heap
+// has been copied aside and the first mapping we make wipes it.  So we take a
+// copy of everything we need up front, and from then on neither allocate nor
+// throw.
+static
+mmap_area
+allocate_hugepage_memory(const std::vector<hugetlbfs_pool>& pools, void* where, size_t how_much) {
+    struct pool_ref {
+        size_t page_size;
+        int fd;
+    };
+    // More huge page sizes than any architecture offers.
+    static constexpr size_t max_pools = 8;
+    pool_ref refs[max_pools];
+    auto nr_pools = std::min(pools.size(), max_pools);
+    for (size_t i = 0; i < nr_pools; ++i) {
+        refs[i] = pool_ref{pools[i].page_size, pools[i].fd->get()};
+    }
+
+    auto start = reinterpret_cast<char*>(where);
+    auto p = start;
+    auto left = how_much;
+    for (size_t i = 0; i < nr_pools && left; ++i) {
+        auto& pool = refs[i];
+        while (left >= pool.page_size) {
+            auto want = align_down(left, pool.page_size);
+            // Mounts created with a size= option tell us how much they have left,
+            // which saves us guessing. The figure can be stale, so it is a hint.
+            if (auto avail = hugetlbfs_free_bytes(pool.fd)) {
+                want = std::min(want, align_down(*avail, pool.page_size));
+            }
+            while (want && !try_map_hugetlbfs(pool.fd, p, want)) {
+                // The pool holds less than we were told - perhaps another shard
+                // beat us to it. Back off geometrically, so that an unhelpful
+                // hint costs us a handful of failed mmap()s rather than one per
+                // huge page.
+                want = align_down(want / 2, pool.page_size);
+            }
+            if (!want) {
+                // The pool is empty; move on to the next, smaller, page size.
+                break;
+            }
+            p += want;
+            left -= want;
+        }
+    }
+    if (left) {
+        auto r = ::mmap(p, left,
+                PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+                -1, 0);
+        if (r == MAP_FAILED) {
+            abort();
+        }
+    }
+    hugepage_shortfall = left;
+    return mmap_area(start, mmap_deleter{how_much});
+}
+
+void cpu_pages::replace_memory_backing(allocate_system_memory_fn alloc_sys_mem, size_t size) {
     // We would like to use ::mremap() to atomically replace the old anonymous
     // memory with hugetlbfs backed memory, but mremap() does not support hugetlbfs
     // (for no reason at all).  So we must copy the anonymous memory to some other
     // place, map hugetlbfs in place, and copy it back, without modifying it during
     // the operation.
+    //
+    // @size may exceed the memory currently in use; the excess is mapped but not
+    // yet accounted for, and a subsequent resize() will pick it up.
     auto bytes = nr_pages * page_size;
+    SEASTAR_ASSERT(size >= bytes);
     auto old_mem = mem();
     auto relocated_old_mem = mmap_anonymous(nullptr, bytes, PROT_READ|PROT_WRITE, MAP_PRIVATE);
     std::memcpy(relocated_old_mem.get(), old_mem, bytes);
-    alloc_sys_mem(old_mem, bytes).release();
+    alloc_sys_mem(old_mem, size).release();
     std::memcpy(old_mem, relocated_old_mem.get(), bytes);
 }
 
@@ -1916,11 +2095,23 @@ configure(std::vector<resource::memory> m, bool mbind,
     if (hugetlbfs_path) {
         // std::function is copyable, but file_desc is not, so we must use
         // a shared_ptr to allow sys_alloc to be copied around
-        auto fdp = make_lw_shared<file_desc>(file_desc::temporary(*hugetlbfs_path));
-        sys_alloc = [fdp] (void* where, size_t how_much) {
-            return allocate_hugetlbfs_memory(*fdp, where, how_much);
+        auto pools = make_lw_shared<std::vector<hugetlbfs_pool>>(open_hugetlbfs_pools(*hugetlbfs_path));
+        sys_alloc = [pools] (void* where, size_t how_much) {
+            return allocate_hugepage_memory(*pools, where, how_much);
         };
-        get_cpu_mem().replace_memory_backing(sys_alloc);
+        // Huge pages can only be mapped at file offsets and in sizes that are
+        // multiples of the huge page size, so we cannot grow the mapping in the
+        // small increments resize() uses for anonymous memory. Map the shard's
+        // memory in one go instead, ...
+        get_cpu_mem().replace_memory_backing(sys_alloc, std::max(total, get_cpu_mem().nr_pages * page_size));
+        if (hugepage_shortfall) {
+            seastar_logger.warn("Could not back {} bytes of this shard's memory with huge pages, using ordinary pages instead",
+                    hugepage_shortfall);
+        }
+        // ... and let resize() below only bring the book-keeping up to date.
+        sys_alloc = [] (void* where, size_t how_much) {
+            return mmap_area(reinterpret_cast<char*>(where), mmap_deleter{how_much});
+        };
     }
     get_cpu_mem().resize(total, sys_alloc);
     size_t pos = 0;

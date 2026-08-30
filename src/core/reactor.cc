@@ -4078,7 +4078,7 @@ smp_options::smp_options(program_options::option_group* parent_group)
     , cpuset(*this, "cpuset", {}, "CPUs to use (in cpuset(7) list format (ex: 0,1-3,7); default: all))")
     , memory(*this, "memory", std::nullopt, "memory to use, in bytes (ex: 4G) (default: all)")
     , reserve_memory(*this, "reserve-memory", {}, "memory reserved to OS (if --memory not specified)")
-    , hugepages(*this, "hugepages", {}, "path to accessible hugetlbfs mount (typically /dev/hugepages/something)")
+    , hugepages(*this, "hugepages", {}, "path to an accessible hugetlbfs mount (typically /dev/hugepages/something), or to a directory holding one hugetlbfs mount per huge page size (see perftune.py --tune=hugepages)")
     , lock_memory(*this, "lock-memory", {}, "lock all memory (prevents swapping)")
     , thread_affinity(*this, "thread-affinity", true, "pin threads to their cpus (disable for overprovisioning)")
 #ifdef SEASTAR_HAVE_HWLOC
